@@ -1,0 +1,110 @@
+[project]
+name = "rwkv-skills"
+version = "0.1.0"
+description = "RWKV Evalution Server"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # chirrup
+    # "fastapi>=0.121.0",
+    # "ninja>=1.13.0",
+    # "numpy>=2.3.3",
+    # "pydantic>=2.12.3",
+    # "pydantic-settings>=2.0.0",
+    # "pyyaml>=6.0.3",
+    # "snowflake-id>=1.0.2",
+    # "uvicorn>=0.38.0",
+    # rwkv-skills
+    "bitsandbytes>=0.46.0",
+    "datasets>=3.6.0",
+    "deepspeed>=0.17.1",
+    "einops>=0.8.1",
+    "gputils>=1.0.6",
+    "lightning>=2.5.1.post0",
+    "loguru>=0.7.3",
+    "matplotlib>=3.10.3",
+    "ninja>=1.11.1.4",
+    "numpy>=2.3.4",
+    "optuna>=4.5.0",
+    "pandas>=2.3.3",
+    "plotly>=6.1.2",
+    "langdetect>=1.0.9",
+    "immutabledict>=2.2.5",
+    "nltk>=3.9.1",
+    "pynvml>=13.0.1",
+    "pyrwkv-tokenizer>=0.9.1",
+    "rwkv>=0.8.29",
+    "rwkv-fla>=0.7.202506181413",
+    "transformers>=4.52.4",
+    "triton>=3.3.1",
+    "wandb>=0.20.1",
+    "absl-py>=2.3.1",
+    "openai>=2.7.1",
+    "scikit-build-core>=0.11.6",
+    "pybind11>=3.0.1",
+    "cmake>=4.1.2",
+    "dotenv>=0.9.9",
+    "basedpyright>=1.32.1",
+    "flashinfer-python>=0.5.2",
+    "evalplus @ git+https://github.com/evalplus/evalplus@c91370f",
+    "gradio>=5.50.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/view", "src/eval", "src/infer"]
+
+[project.optional-dependencies]
+torch-cpu = ["torch>=2.8.0"]
+torch-cu129 = ["torch>=2.8.0"]
+torch-cu126 = ["torch>=2.8.0"]
+torch-rocm = ["torch==2.9.1+rocm6.4", "pytorch-triton-rocm"]
+dev = ["openai>=1.0.0", "requests>=2.32.5", "tqdm>=4.67.1"]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-cu129" },
+        { extra = "torch-cu126" },
+        { extra = "torch-rocm" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "torch-cpu" },
+    { index = "pytorch-cu129", extra = "torch-cu129" },
+    { index = "pytorch-cu126", extra = "torch-cu126" },
+    { index = "pytorch-rocm", extra = "torch-rocm" },
+]
+pytorch-triton-rocm = { index = "pytorch-rocm" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.4"
+explicit = true
+
+[tool.black]
+line-length = 120
