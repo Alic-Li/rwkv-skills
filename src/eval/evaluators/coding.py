@@ -27,11 +27,18 @@ DEFAULT_CODE_SAMPLING = SamplingConfig(
 )
 
 
+def _compress_newlines(text: str) -> str:
+    lines = [line for line in text.splitlines() if line.strip()]
+    return "\n".join(lines)
+
+
 def _format_prompt(prompt: str) -> str:
-    clean = "\n".join(line for line in prompt.splitlines() if line.strip())
+    """Match the rwkv_mmlu HumanEval prompt: duplicate code after Assistant."""
+
+    clean = _compress_newlines(prompt).strip()
     return (
-        "User: You are a top-level code master. Complete the following code without any additional text or explanation:\n"
-        f"{clean}\n\nAssistant:"
+        "User:You are a top-level code master. Complete the following code without any additional text or explanation:\n"
+        f"{clean}\n\nAssistant:{clean}"
     )
 
 
