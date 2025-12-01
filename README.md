@@ -4,16 +4,15 @@
 
 ## 目录速览
 - `src/infer`：RWKV 模型加载、采样策略与连续批量生成引擎。
+- `src/infer/rwkv7`：上游 RWKV7 参考实现（含 CUDA 扩展、词表）已内置，无需额外子模块。
 - `src/eval/datasets`：数据结构定义、JSONL 加载器以及各类数据集的准备脚本。
 - `src/eval/evaluators`：多选 / 自由问答 / 指令遵循 / 代码生成（HumanEval、MBPP）评测管线。
 - `src/eval/scheduler`：评测任务排队、GPU 侦测与调度的 CLI（现已附带 multi-choice / free-response / instruction-following / human-eval / mbpp 入口脚本）。
-- `albatross`：上游 RWKV 参考实现子模块。
 - `weights`、`data`、`results`（可选）：模型权重、数据集与评测产物的默认存放位置。
 
 ## 环境要求
 - Python 3.12+，推荐安装 `uv` 以管理依赖。
 - NVIDIA GPU（使用 `flashinfer`、`triton` 等依赖），需要与所选 PyTorch 发行版匹配的 CUDA/ROCm。
-- Git 子模块：`git submodule update --init --recursive` 确保 `albatross` 就绪。
 
 ## 安装
 ```bash

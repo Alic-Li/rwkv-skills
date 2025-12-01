@@ -7,8 +7,8 @@ from enum import Enum
 from pathlib import Path
 import types
 
-from albatross.reference.rwkv7 import RWKV_x070
-from albatross.reference.utils import TRIE_TOKENIZER
+from .rwkv7.rwkv7 import RWKV_x070
+from .rwkv7.utils import TRIE_TOKENIZER
 
 
 class ArchVersion(str, Enum):
@@ -60,10 +60,11 @@ def load_rwkv_model(config: ModelLoadConfig):
     if not weights_path.exists():
         raise FileNotFoundError(f"模型权重不存在: {weights_path}")
 
+    default_tokenizer_path = Path(__file__).resolve().parent / "rwkv7" / "rwkv_vocab_v20230424.txt"
     tokenizer_path = (
         Path(config.tokenizer_path).expanduser().resolve()
         if config.tokenizer_path
-        else Path("albatross/reference/rwkv_vocab_v20230424.txt").resolve()
+        else default_tokenizer_path
     )
     if not tokenizer_path.exists():
         raise FileNotFoundError(f"Tokenizer 词表不存在: {tokenizer_path}")

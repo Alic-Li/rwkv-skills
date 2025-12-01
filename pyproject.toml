@@ -60,7 +60,11 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/eval", "src/infer", "src/space"]
-include = ["src/space/styles/*.css"]
+include = [
+    "src/space/styles/*.css",
+    "src/infer/rwkv7/rwkv_vocab_v20230424.txt",
+    "src/infer/rwkv7/cuda/*",
+]
 
 [project.optional-dependencies]
 torch-cpu = ["torch>=2.8.0"]
