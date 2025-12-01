@@ -1,0 +1,180 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+#space-app {
+  --space-bg: radial-gradient(circle at 20% 20%, rgba(66, 121, 255, 0.12), transparent 35%),
+    radial-gradient(circle at 80% 0%, rgba(30, 182, 170, 0.15), transparent 30%),
+    linear-gradient(135deg, #0a1224 0%, #0d1b2f 60%, #0b131f 100%);
+  --space-panel: rgba(18, 29, 48, 0.85);
+  --space-border: rgba(255, 255, 255, 0.08);
+  --space-text: #e8edf7;
+  --space-muted: #9fb0c5;
+  --space-accent: linear-gradient(120deg, #2dd4bf, #60a5fa);
+  --space-accent-solid: #3fd6c9;
+  --space-card-glow: 0 10px 40px rgba(63, 214, 201, 0.08);
+
+  font-family: "Space Grotesk", "Segoe UI", "San Francisco", system-ui, -apple-system, sans-serif;
+  color: var(--space-text);
+  background: var(--space-bg);
+  padding: 32px;
+  min-height: 100vh;
+  box-sizing: border-box;
+
+  .space-hero {
+    padding: 8px 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+
+    h1 {
+      font-size: 28px;
+      letter-spacing: 0.5px;
+      margin: 0;
+      background: var(--space-accent);
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .hero-subtitle {
+      color: var(--space-muted);
+      margin-top: 6px;
+    }
+  }
+
+  .space-card {
+    background: var(--space-panel);
+    border: 1px solid var(--space-border);
+    border-radius: 16px;
+    padding: 14px 16px;
+    box-shadow: var(--space-card-glow);
+    backdrop-filter: blur(6px);
+  }
+
+  .space-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+    align-items: center;
+
+    .quick-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      .stat-label {
+        color: var(--space-muted);
+        font-size: 13px;
+      }
+      .stat-value {
+        font-size: 20px;
+        font-weight: 600;
+      }
+    }
+  }
+
+  .score-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+    margin-top: 12px;
+  }
+
+  .score-card {
+    background: linear-gradient(145deg, rgba(22, 34, 53, 0.9), rgba(16, 26, 44, 0.9));
+    border: 1px solid var(--space-border);
+    border-radius: 18px;
+    padding: 16px;
+    box-shadow: var(--space-card-glow);
+    position: relative;
+    overflow: hidden;
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+
+    &:hover {
+      transform: translateY(-4px);
+      border-color: rgba(96, 165, 250, 0.5);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25), 0 10px 40px rgba(96, 165, 250, 0.12);
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+
+      .dataset {
+        font-weight: 700;
+        font-size: 16px;
+        letter-spacing: 0.2px;
+      }
+    }
+
+    .badge {
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--space-border);
+      color: var(--space-text);
+      font-size: 12px;
+      letter-spacing: 0.4px;
+    }
+
+    .primary-metric {
+      font-size: 32px;
+      font-weight: 700;
+      margin: 4px 0 6px;
+      background: var(--space-accent);
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .metric-key {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.9px;
+      color: var(--space-muted);
+    }
+
+    .metric-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 8px 12px;
+      margin-top: 10px;
+
+      .metric-line {
+        display: flex;
+        justify-content: space-between;
+        font-size: 13px;
+        color: var(--space-text);
+        opacity: 0.9;
+      }
+    }
+
+    .meta {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--space-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--space-accent-solid);
+        display: inline-block;
+        margin-right: 6px;
+      }
+    }
+  }
+
+  .empty-state {
+    padding: 24px;
+    text-align: center;
+    color: var(--space-muted);
+    border: 1px dashed var(--space-border);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+}

@@ -49,6 +49,7 @@ dependencies = [
     "flashinfer-python>=0.5.2",
     "evalplus @ git+https://github.com/evalplus/evalplus@c91370f",
     "gradio>=5.50.0",
+    "sass>=0.24.0",
 ]
 
 [build-system]
@@ -59,7 +60,8 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/view", "src/eval", "src/infer"]
+packages = ["src/eval", "src/infer", "src/space"]
+include = ["src/space/styles/*.scss"]
 
 [project.optional-dependencies]
 torch-cpu = ["torch>=2.8.0"]
@@ -110,6 +112,7 @@ explicit = true
 [project.scripts]
 rwkv-skills-scheduler = "src.eval.scheduler.cli:main"
 rwkv-download-weights = "src.bin.download_weights:main"
+rwkv-skills-space = "src.space.app:main"
 
 [tool.black]
 line-length = 120
