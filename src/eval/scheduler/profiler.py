@@ -164,9 +164,12 @@ class BatchProfiler:
                     "cuda:0",
                     batch_flag,
                     str(candidate),
-                    probe_flag,
                 ]
             )
+            if probe_flag:
+                command.append(probe_flag)
+                if probe_flag in {"--max-samples", "--max-tokens"}:
+                    command.append("1")
             if dataset_path is not None:
                 command.extend(["--dataset", str(dataset_path)])
             if job.probe_max_generate_flag:
@@ -211,7 +214,7 @@ class BatchProfiler:
                 save_batch_cache(self.cache_path, self._cache)
                 continue
 
-            print(f"⚠️  Batch size {candidate} failed for {job_id} on cuda:{gpu} (exit {proc.returncode}).")
+            print(f"❌ Batch size {candidate} probe failed for {job_id} on cuda:{gpu} (exit {proc.returncode}).")
             if stdout:
                 print("   probe stdout:")
                 for line in stdout.splitlines():
@@ -220,22 +223,7 @@ class BatchProfiler:
                 print("   probe stderr:")
                 for line in stderr.splitlines():
                     print(f"     {line}")
-            model_cache[gpu] = {
-                "last_error": f"probe failed at {candidate}: {message[:200]}",
-                "last_probe": time.time(),
-            }
-            save_batch_cache(self.cache_path, self._cache)
-            break
-
-        fallback = min(candidates)
-        model_cache[gpu] = {
-            "batch": fallback,
-            "last_error": "probe failed; using fallback",
-            "last_probe": time.time(),
-        }
-        save_batch_cache(self.cache_path, self._cache)
-        print(f"⚠️  Probe failed for {job_id} on cuda:{gpu}; using fallback batch size {fallback}.")
-        return fallback
+            raise RuntimeError(f"probe failed for {job_id} on cuda:{gpu}: {message}")
 
 
 __all__ = ["BatchProfiler", "load_batch_cache", "save_batch_cache"]

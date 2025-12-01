@@ -22,10 +22,14 @@ DEFAULT_LOG_DIR = _path_env("RUN_LOG_DIR", RESULTS_ROOT / "scores")
 DEFAULT_RUN_LOG_DIR = _path_env("RUN_RUN_LOG_DIR", RESULTS_ROOT / "logs")
 DEFAULT_PID_DIR = _path_env("RUN_PID_DIR", RESULTS_ROOT / "pids")
 
-DEFAULT_MODEL_GLOBS: tuple[str, ...] = (
-    "/public/home/ssjxzkz/Weights/BlinkDL__rwkv7-g1/*.pth",
-    str(REPO_ROOT / "weights" / "rwkv7-*.pth"),
-)
+_MODEL_GLOBS_ENV = os.environ.get("RUN_MODEL_GLOBS")
+if _MODEL_GLOBS_ENV:
+    DEFAULT_MODEL_GLOBS = tuple(filter(None, _MODEL_GLOBS_ENV.split(os.pathsep)))
+else:
+    DEFAULT_MODEL_GLOBS = (
+        "/public/home/ssjxzkz/Weights/BlinkDL__rwkv7-g1/*.pth",
+        str(REPO_ROOT / "weights" / "rwkv7-*.pth"),
+    )
 
 DEFAULT_GPU_IDLE_MAX_MEM = int(os.environ.get("RUN_GPU_IDLE_MAX_MEM", "1000"))
 DEFAULT_PYTHON = os.environ.get("RUN_PYTHON", "python")

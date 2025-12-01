@@ -79,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_job_filters(parser: argparse.ArgumentParser) -> None:
+    domain_choices = sorted({spec.domain for spec in JOB_CATALOGUE.values() if spec.domain})
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR), help="评估 JSON 结果目录")
     parser.add_argument("--pid-dir", default=str(DEFAULT_PID_DIR), help="PID 文件目录")
     parser.add_argument(
@@ -107,12 +108,13 @@ def _add_job_filters(parser: argparse.ArgumentParser) -> None:
         choices=sorted(JOB_CATALOGUE.keys()),
         help="跳过指定 job",
     )
-    parser.add_argument(
-        "--domains",
-        nargs="+",
-        choices=("code", "multi_choice", "free_response", "instruction_following"),
-        help="按任务域筛选 job，例如 --domains code",
-    )
+    if domain_choices:
+        parser.add_argument(
+            "--domains",
+            nargs="+",
+            choices=domain_choices,
+            help=f"按任务域筛选 job，例如 --domains {'/'.join(domain_choices)}",
+        )
     parser.add_argument(
         "--skip-datasets",
         nargs="+",
@@ -131,7 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         getattr(args, "domains", None),
     )
     if not job_order:
-        print("⚠️ 未剩余可调度的 job，请检查 --only-jobs / --skip-jobs 参数设置")
+        print("⚠️ 未剩余可调度的 job，请检查 --domains / --only-jobs / --skip-jobs 参数设置")
         return 1
 
     model_globs = tuple(getattr(args, "models", list(DEFAULT_MODEL_GLOBS)))
@@ -199,16 +201,8 @@ def _resolve_job_order(
     order = list(JOB_ORDER)
 
     if domains:
-        domain_map = {
-            "code": {"code_human_eval", "code_mbpp"},
-            "multi_choice": {"multi_choice_plain", "multi_choice_cot"},
-            "free_response": {"free_response", "free_response_judge"},
-            "instruction_following": {"instruction_following"},
-        }
-        allowed = set()
-        for dom in domains:
-            allowed.update(domain_map.get(dom, set()))
-        order = [job for job in order if job in allowed]
+        allowed_domains = set(domains)
+        order = [job for job in order if JOB_CATALOGUE[job].domain in allowed_domains]
 
     if include:
         allowed = {job for job in include}

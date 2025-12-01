@@ -56,6 +56,7 @@ class JobSpec:
     module: str
     dataset_slugs: tuple[str, ...]
     is_cot: bool
+    domain: str
     extra_args: tuple[str, ...] = ()
     batch_flag: str | None = None
     probe_flag: str | None = None
@@ -140,12 +141,14 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         module="src.bin.eval_multi_choice",
         dataset_slugs=MULTICHOICE_DATASET_SLUGS,
         is_cot=False,
+        domain="multi_choice",
     ),
     "multi_choice_cot": JobSpec(
         name="multi_choice_cot",
         module="src.bin.eval_multi_choice_cot",
         dataset_slugs=MULTICHOICE_DATASET_SLUGS,
         is_cot=True,
+        domain="multi_choice",
         extra_args=("--no-param-search",),
         batch_flag="--batch-size",
         probe_flag="--probe-only",
@@ -156,6 +159,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         module="src.bin.eval_free_response",
         dataset_slugs=MATH_DATASET_SLUGS,
         is_cot=True,
+        domain="free_response",
         extra_args=("--no-param-search",),
         batch_flag="--batch-size",
         probe_flag="--probe-only",
@@ -166,6 +170,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         module="src.bin.eval_free_response_judge",
         dataset_slugs=LLM_JUDGE_DATASET_SLUGS,
         is_cot=True,
+        domain="free_response",
         extra_args=("--no-param-search",),
         batch_flag="--batch-size",
         probe_flag="--probe-only",
@@ -176,6 +181,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         module="src.bin.eval_code_human_eval",
         dataset_slugs=(canonical_slug("human_eval_test"),),
         is_cot=False,
+        domain="code",
         batch_flag="--batch-size",
         probe_flag="--max-samples",
         probe_max_generate_flag="--max-tokens",
@@ -185,6 +191,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         module="src.bin.eval_code_mbpp",
         dataset_slugs=(canonical_slug("mbpp_test"),),
         is_cot=False,
+        domain="code",
         batch_flag="--batch-size",
         probe_flag="--max-samples",
         probe_max_generate_flag="--max-tokens",
@@ -194,6 +201,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         module="src.bin.eval_instruction_following",
         dataset_slugs=INSTRUCTION_FOLLOWING_DATASET_SLUGS,
         is_cot=False,
+        domain="instruction_following",
         extra_args=("--no-param-search",),
     ),
 }
