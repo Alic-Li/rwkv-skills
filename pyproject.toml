@@ -49,7 +49,6 @@ dependencies = [
     "flashinfer-python>=0.5.2",
     "evalplus @ git+https://github.com/evalplus/evalplus@c91370f",
     "gradio>=5.50.0",
-    "sass>=0.24.0",
 ]
 
 [build-system]
@@ -61,7 +60,7 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/eval", "src/infer", "src/space"]
-include = ["src/space/styles/*.scss"]
+include = ["src/space/styles/*.css"]
 
 [project.optional-dependencies]
 torch-cpu = ["torch>=2.8.0"]

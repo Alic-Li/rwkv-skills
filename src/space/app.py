@@ -36,20 +36,16 @@ TABLE_HEADERS = [
 ]
 
 
-def _compile_css() -> tuple[str, str | None]:
-    style_path = Path(__file__).parent / "styles" / "space.scss"
-    try:
-        import sass  # type: ignore
-    except Exception as exc:  # noqa: BLE001 - optional dependency
-        warning = f"未加载样式：sass 导入失败 ({exc})"
+def _load_css() -> tuple[str, str | None]:
+    style_path = Path(__file__).parent / "styles" / "space.css"
+    if not style_path.exists():
+        warning = f"未找到样式文件：{style_path}"
         print(f"[space] {warning}")
         return "", warning
-    if not style_path.exists():
-        return "", None
     try:
-        return sass.compile(filename=str(style_path)), None
-    except Exception as exc:  # noqa: BLE001 - optional dependency
-        warning = f"未加载样式：编译 {style_path.name} 失败 ({exc})"
+        return style_path.read_text(encoding="utf-8"), None
+    except Exception as exc:  # noqa: BLE001
+        warning = f"未加载样式：读取 {style_path.name} 失败 ({exc})"
         print(f"[space] {warning}")
         return "", warning
 
@@ -210,7 +206,7 @@ def _initial_payload() -> tuple[list[ScoreEntry], list[ScoreEntry], str, bool, s
 
 
 def _build_dashboard() -> gr.Blocks:
-    css, style_warning = _compile_css()
+    css, style_warning = _load_css()
     entries, visible, model, auto_selected, domain, load_errors = _initial_payload()
     model_choices, domain_choices = _compute_choices(entries)
     warnings = load_errors + ([style_warning] if style_warning else [])
