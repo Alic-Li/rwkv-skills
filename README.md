@@ -54,7 +54,7 @@ from src.infer.model import ModelLoadConfig
 pipeline = MultipleChoicePipeline(ModelLoadConfig(weights_path="weights/rwkv7-*.pth"))
 result = pipeline.run_direct(
     dataset_path="data/mmlu/test.jsonl",
-    output_path="results/logs/mmlu_direct.jsonl",
+    output_path="results/completions/mmlu_direct.jsonl",
 )
 print(result)
 ```
@@ -64,7 +64,7 @@ print(result)
 `rwkv-skills-scheduler` 暴露了一组命令（队列预览、调度、状态、停止、日志轮播）：
 ```bash
 rwkv-skills-scheduler queue
-rwkv-skills-scheduler dispatch --run-log-dir results/logs
+rwkv-skills-scheduler dispatch --completion-dir results/completions --run-log-dir results/logs --eval-result-dir results/results
 ```
 默认模型 glob 在 `src/eval/scheduler/config.py` 中配置（仅指向仓库内 `weights/rwkv7-*.pth`，请按需覆盖）。调度器依赖的入口脚本已提供：
 `src/bin/eval_multi_choice.py`、`eval_multi_choice_cot.py`、`eval_free_response.py`、`eval_free_response_judge.py`、`eval_instruction_following.py`、`eval_code_human_eval.py`、`eval_code_mbpp.py`。
@@ -80,7 +80,7 @@ rwkv-skills-scheduler dispatch --run-log-dir results/logs
     --batch-size 128 \
     --eval-timeout 3
   ```
-  生成的样本写入 results/logs 结构，并会自动执行官方测试用例输出 pass@k 结果（如仅生成 1 次只输出 pass@1）。
+  生成的样本写入 results/completions 结构，并会自动执行官方测试用例输出 pass@k 结果（如仅生成 1 次只输出 pass@1）。
 
 ## MBPP 代码生成评测
 - 数据集准备：`prepare_dataset("mbpp", Path("data"))` 会使用 EvalPlus 版本的 MBPP+，并将 prompt 中的 4 空格转换为制表符。

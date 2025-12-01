@@ -15,7 +15,8 @@ def build_run_slug(model_path: Path, dataset_slug: str, *, is_cot: bool) -> str:
 
 
 def build_run_log_name(model_path: Path, dataset_slug: str, *, is_cot: bool) -> str:
-    return f"{build_run_slug(model_path, dataset_slug, is_cot=is_cot)}.log"
+    """Return a stable stem for all artifacts (JSONL / console logs) of a run."""
+    return build_run_slug(model_path, dataset_slug, is_cot=is_cot)
 
 
 __all__ = ["build_run_slug", "build_run_log_name"]

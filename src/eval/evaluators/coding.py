@@ -94,10 +94,12 @@ class CodingPipeline:
             if seq is None:
                 continue
             # 保留模型输出的原始缩进，仅去掉末尾空白以避免无意义尾随。
-            completion = seq.text.rstrip()
+            prompt_text = prompts[idx]
+            raw_output = seq.text or ""
+            completion = raw_output.rstrip()
             stage = StageRecord(
-                prompt=prompts[idx],
-                output=seq.text,
+                prompt=prompt_text,
+                output=raw_output,
                 finish_reason=seq.finish_reason,
             )
             metadata = {
@@ -177,10 +179,12 @@ class CodingPipeline:
             seq = output_by_idx.get(idx)
             if seq is None:
                 continue
-            completion = seq.text.rstrip()
+            prompt_text = prompts[idx]
+            raw_output = seq.text or ""
+            completion = raw_output.rstrip()
             stage = StageRecord(
-                prompt=prompts[idx],
-                output=seq.text,
+                prompt=prompt_text,
+                output=raw_output,
                 finish_reason=seq.finish_reason,
             )
             metadata = {

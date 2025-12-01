@@ -49,6 +49,7 @@ dependencies = [
     "flashinfer-python>=0.5.2",
     "evalplus @ git+https://github.com/evalplus/evalplus@c91370f",
     "gradio>=5.50.0",
+    "nvidia-cudnn-cu12>=9.10.2.21",
 ]
 
 [build-system]

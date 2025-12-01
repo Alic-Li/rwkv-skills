@@ -10,10 +10,13 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .config import (
+    DEFAULT_COMPLETION_DIR,
     DEFAULT_DISPATCH_POLL_SECONDS,
+    DEFAULT_EVAL_RESULT_DIR,
     DEFAULT_GPU_IDLE_MAX_MEM,
     DEFAULT_MODEL_GLOBS,
     DEFAULT_PYTHON,
+    DEFAULT_RUN_LOG_DIR,
     REPO_ROOT,
 )
 from .datasets import DATASET_ROOTS, DATA_OUTPUT_ROOT
@@ -47,7 +50,9 @@ class QueueOptions:
 
 @dataclass(slots=True)
 class DispatchOptions(QueueOptions):
-    run_log_dir: Path = REPO_ROOT / "logs" / "runs"
+    run_log_dir: Path = DEFAULT_RUN_LOG_DIR
+    completion_dir: Path = DEFAULT_COMPLETION_DIR
+    eval_result_dir: Path = DEFAULT_EVAL_RESULT_DIR
     dispatch_poll_seconds: int = DEFAULT_DISPATCH_POLL_SECONDS
     gpu_idle_max_mem: int = DEFAULT_GPU_IDLE_MAX_MEM
     skip_missing_dataset: bool = False
@@ -93,7 +98,7 @@ def action_queue(opts: QueueOptions) -> list[QueueItem]:
 
 
 def action_dispatch(opts: DispatchOptions) -> None:
-    ensure_dirs(opts.log_dir, opts.pid_dir, opts.run_log_dir)
+    ensure_dirs(opts.log_dir, opts.pid_dir, opts.run_log_dir, opts.completion_dir, opts.eval_result_dir)
     if opts.clean_param_swap:
         _clean_param_swap_records(opts.log_dir)
 
@@ -232,8 +237,9 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 )
                 raise
 
-            log_name = build_run_log_name(item.model_path, dataset_slug, is_cot=job.is_cot)
-            log_path = opts.run_log_dir / log_name
+            log_stem = build_run_log_name(item.model_path, dataset_slug, is_cot=job.is_cot)
+            completion_path = opts.completion_dir / f"{log_stem}.jsonl"
+            console_log_path = opts.run_log_dir / f"{log_stem}.log"
             pid_path = opts.pid_dir / f"{item.job_id}.pid"
             item.dataset_path = dataset_path
 
@@ -264,8 +270,12 @@ def action_dispatch(opts: DispatchOptions) -> None:
                     "RWKV_SKILLS_MODEL_PATH": str(item.model_path),
                     "RWKV_SKILLS_DATASET": str(dataset_path),
                     "RWKV_SKILLS_DATASET_SLUG": dataset_slug,
-                    "RWKV_SKILLS_LOG_PATH": str(log_path),
+                    "RWKV_SKILLS_LOG_PATH": str(completion_path),
                     "RWKV_SKILLS_DISABLE_PARAM_SEARCH": "1",
+                    "RUN_LOG_DIR": str(opts.log_dir),
+                    "RUN_COMPLETION_DIR": str(opts.completion_dir),
+                    "RUN_EVAL_RESULT_DIR": str(opts.eval_result_dir),
+                    "RUN_RUN_LOG_DIR": str(opts.run_log_dir),
                 }
             )
 
@@ -282,7 +292,8 @@ def action_dispatch(opts: DispatchOptions) -> None:
             command = build_command(job, item.model_path, dataset_path, f"cuda:{gpu}", batch_size=batch_size)
             print(f"🚀 Launch {item.job_id} -> cuda:{gpu}")
             print(f"    Dataset: {dataset_path}")
-            print(f"    Log: {log_path}")
+            print(f"    Completion: {completion_path}")
+            print(f"    Console: {console_log_path}")
             print(f"    Cmd: {' '.join(command)}")
             meta = job_metadata.setdefault(item.job_id, {})
             meta.update(
@@ -291,17 +302,18 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 dataset_path=str(dataset_path),
                 model_path=str(item.model_path),
                 model_slug=item.model_slug,
-                log_path=str(log_path),
+                log_path=str(completion_path),
+                console_log_path=str(console_log_path),
             )
 
             process = launch_job(
                 item.job_id,
                 command,
                 cwd=REPO_ROOT,
-                log_path=log_path,
+                log_path=console_log_path,
                 env=env,
             )
-            write_pid_file(opts.pid_dir, item.job_id, process.pid, gpu, log_name)
+            write_pid_file(opts.pid_dir, item.job_id, process.pid, gpu, console_log_path.name)
             launch_times[item.job_id] = time.time()
             pending_start = pending_since.pop(item.job_id, None)
             wait_s = time.time() - pending_start if pending_start else None
@@ -312,7 +324,7 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 dataset_slug=dataset_slug,
                 dataset_path=str(dataset_path),
                 model_path=str(item.model_path),
-                log_path=str(log_path),
+                log_path=str(completion_path),
                 gpu=f"cuda:{gpu}",
                 pid=process.pid,
                 wait_s=wait_s,

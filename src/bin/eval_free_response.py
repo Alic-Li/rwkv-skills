@@ -38,7 +38,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, help="Limit number of samples for quick runs")
     parser.add_argument("--cot-max-tokens", type=int, help="Clamp CoT generation length")
     parser.add_argument("--final-max-tokens", type=int, help="Clamp final answer generation length")
-    parser.add_argument("--output", help="Output JSONL path (defaults to results/logs layout)")
+    parser.add_argument("--output", help="Output JSONL path (defaults to results/completions layout)")
     return parser.parse_args(argv)
 
 

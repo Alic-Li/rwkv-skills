@@ -17,7 +17,7 @@ from .jobs import JobSpec
 _BATCH_CANDIDATES_ENV = os.environ.get("RUN_BATCH_CANDIDATES") or os.environ.get(
     "RUN_COT_BATCH_CANDIDATES",
     # limit default probing to 2048 to avoid host fallback overhead when VRAM is flaky
-    "2048,1024,512,256,128,64,32,16,8,4,2,1",
+    "4096,2048,1024,512,256,128,64,32,16,8,4,2,1",
 )
 DEFAULT_COT_BATCH_CANDIDATES = tuple(
     int(value.strip()) for value in _BATCH_CANDIDATES_ENV.split(",") if value.strip()

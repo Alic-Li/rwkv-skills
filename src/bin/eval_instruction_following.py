@@ -40,7 +40,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--enable-think", action="store_true", help="Append <think for think-style prompting")
     parser.add_argument("--stop-token", action="append", type=int, help="Extra stop tokens (can repeat)")
     parser.add_argument("--ban-token", action="append", type=int, help="Tokens to ban (can repeat)")
-    parser.add_argument("--output", help="Output JSONL path (defaults to results/logs layout)")
+    parser.add_argument("--output", help="Output JSONL path (defaults to results/completions layout)")
     return parser.parse_args(argv)
 
 

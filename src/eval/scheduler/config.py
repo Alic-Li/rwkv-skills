@@ -19,6 +19,8 @@ def _path_env(name: str, default: Path) -> Path:
 
 
 DEFAULT_LOG_DIR = _path_env("RUN_LOG_DIR", RESULTS_ROOT / "scores")
+DEFAULT_COMPLETION_DIR = _path_env("RUN_COMPLETION_DIR", RESULTS_ROOT / "completions")
+DEFAULT_EVAL_RESULT_DIR = _path_env("RUN_EVAL_RESULT_DIR", RESULTS_ROOT / "results")
 DEFAULT_RUN_LOG_DIR = _path_env("RUN_RUN_LOG_DIR", RESULTS_ROOT / "logs")
 DEFAULT_PID_DIR = _path_env("RUN_PID_DIR", RESULTS_ROOT / "pids")
 
@@ -60,6 +62,8 @@ __all__ = [
     "SchedulerPaths",
     "QueueCliDefaults",
     "DEFAULT_LOG_DIR",
+    "DEFAULT_COMPLETION_DIR",
+    "DEFAULT_EVAL_RESULT_DIR",
     "DEFAULT_PID_DIR",
     "DEFAULT_RUN_LOG_DIR",
     "DEFAULT_MODEL_GLOBS",

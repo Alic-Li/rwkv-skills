@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 from pathlib import Path
 from typing import Sequence
 
 from dataclasses import replace
 
-from src.eval.results.layout import jsonl_path, write_scores_json
+from src.eval.results.layout import eval_details_path, jsonl_path, write_scores_json
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
 from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
 from src.eval.evaluators.coding import CodingPipeline, DEFAULT_CODE_SAMPLING
@@ -40,8 +41,34 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--top-p", type=float, help="Override sampling top-p")
     parser.add_argument("--eval-timeout", type=float, default=3.0, help="Seconds per test execution")
     parser.add_argument("--eval-workers", type=int, default=4, help="Parallel workers for evaluation")
-    parser.add_argument("--output", help="Output JSONL path (defaults to results/logs layout)")
+    parser.add_argument("--output", help="Output JSONL path (defaults to results/completions layout)")
     return parser.parse_args(argv)
+
+
+def _finalize_eval_details(
+    details_path: Path | None,
+    *,
+    dataset_slug: str,
+    model_path: str,
+) -> Path | None:
+    if not details_path:
+        return None
+    target = eval_details_path(dataset_slug, is_cot=False, model_name=Path(model_path).stem)
+    source = Path(details_path)
+    if not source.exists():
+        return None
+    try:
+        if source.resolve() == target.resolve():
+            return target
+    except OSError:
+        pass
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), target)
+    except OSError as exc:
+        print(f"⚠️ 无法移动评测详情到 {target}: {exc}")
+        return source
+    return target
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -79,7 +106,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"✅ HumanEval生成完成：{result.sample_count} completions -> {result.output_path}")
     if result.eval_results:
-        print(f"HumanEval 评测: {result.eval_results} (详情: {result.eval_details_path})")
+        relocated = _finalize_eval_details(result.eval_details_path, dataset_slug=slug, model_path=args.model_path)
+        result.eval_details_path = relocated
+        print(f"HumanEval 评测: {result.eval_results} (详情: {relocated})")
     score_path = write_scores_json(
         slug,
         is_cot=False,

@@ -6,16 +6,24 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from src.eval.scheduler.config import RESULTS_ROOT, DEFAULT_LOG_DIR, DEFAULT_RUN_LOG_DIR
+from src.eval.scheduler.config import (
+    RESULTS_ROOT,
+    DEFAULT_LOG_DIR,
+    DEFAULT_COMPLETION_DIR,
+    DEFAULT_EVAL_RESULT_DIR,
+    DEFAULT_RUN_LOG_DIR,
+)
 from src.eval.scheduler.dataset_utils import canonical_slug, safe_slug
 
 
-LOGS_ROOT = DEFAULT_RUN_LOG_DIR
+COMPLETIONS_ROOT = DEFAULT_COMPLETION_DIR
+EVAL_RESULTS_ROOT = DEFAULT_EVAL_RESULT_DIR
 SCORES_ROOT = DEFAULT_LOG_DIR
+CONSOLE_LOG_ROOT = DEFAULT_RUN_LOG_DIR
 
 
 def ensure_results_structure() -> None:
-    for path in (RESULTS_ROOT, LOGS_ROOT, SCORES_ROOT):
+    for path in (RESULTS_ROOT, COMPLETIONS_ROOT, EVAL_RESULTS_ROOT, SCORES_ROOT, CONSOLE_LOG_ROOT):
         path.mkdir(parents=True, exist_ok=True)
 
 
@@ -28,7 +36,7 @@ def result_basename(dataset_slug: str, *, is_cot: bool, model_name: str) -> str:
 
 def jsonl_path(dataset_slug: str, *, is_cot: bool, model_name: str) -> Path:
     ensure_results_structure()
-    return LOGS_ROOT / f"{result_basename(dataset_slug, is_cot=is_cot, model_name=model_name)}.jsonl"
+    return COMPLETIONS_ROOT / f"{result_basename(dataset_slug, is_cot=is_cot, model_name=model_name)}.jsonl"
 
 
 def scores_path(dataset_slug: str, *, is_cot: bool, model_name: str) -> Path:
@@ -36,13 +44,21 @@ def scores_path(dataset_slug: str, *, is_cot: bool, model_name: str) -> Path:
     return SCORES_ROOT / f"{result_basename(dataset_slug, is_cot=is_cot, model_name=model_name)}.json"
 
 
+def eval_details_path(dataset_slug: str, *, is_cot: bool, model_name: str) -> Path:
+    ensure_results_structure()
+    return EVAL_RESULTS_ROOT / f"{result_basename(dataset_slug, is_cot=is_cot, model_name=model_name)}_results.jsonl"
+
+
 __all__ = [
-    "LOGS_ROOT",
+    "COMPLETIONS_ROOT",
+    "EVAL_RESULTS_ROOT",
+    "CONSOLE_LOG_ROOT",
     "SCORES_ROOT",
     "ensure_results_structure",
     "result_basename",
     "jsonl_path",
     "scores_path",
+    "eval_details_path",
     "write_scores_json",
 ]
 
@@ -65,7 +81,7 @@ def write_scores_json(
     {
         "dataset": ..., "model": ..., "cot": bool,
         "metrics": {...}, "samples": int,
-        "created_at": iso8601, "log_path": "results/logs/...jsonl",
+        "created_at": iso8601, "log_path": "results/completions/...jsonl",
         "task": "optional task name",
         "task_details": {"task specific breakdowns"},
         ...extra

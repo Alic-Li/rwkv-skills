@@ -18,7 +18,14 @@ from .actions import (
     action_status,
     action_stop,
 )
-from .config import DEFAULT_LOG_DIR, DEFAULT_MODEL_GLOBS, DEFAULT_PID_DIR, DEFAULT_RUN_LOG_DIR
+from .config import (
+    DEFAULT_COMPLETION_DIR,
+    DEFAULT_EVAL_RESULT_DIR,
+    DEFAULT_LOG_DIR,
+    DEFAULT_MODEL_GLOBS,
+    DEFAULT_PID_DIR,
+    DEFAULT_RUN_LOG_DIR,
+)
 from .dataset_utils import canonical_slug
 from .jobs import JOB_CATALOGUE, JOB_ORDER
 from .models import MODEL_SELECT_CHOICES
@@ -34,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_parser = sub.add_parser("dispatch", help="根据 GPU 空闲情况调度任务")
     _add_job_filters(dispatch_parser)
     dispatch_parser.add_argument("--run-log-dir", default=str(DEFAULT_RUN_LOG_DIR), help="运行日志目录")
+    dispatch_parser.add_argument("--completion-dir", default=str(DEFAULT_COMPLETION_DIR), help="completion JSONL 目录")
+    dispatch_parser.add_argument("--eval-result-dir", default=str(DEFAULT_EVAL_RESULT_DIR), help="评测器结果目录")
     dispatch_parser.add_argument(
         "--dispatch-poll-seconds",
         type=int,
@@ -160,6 +169,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_dir=Path(args.log_dir),
             pid_dir=Path(args.pid_dir),
             run_log_dir=Path(args.run_log_dir),
+            completion_dir=Path(args.completion_dir),
+            eval_result_dir=Path(args.eval_result_dir),
             job_order=job_order,
             model_select=model_select,
             min_param_b=min_param_b,
