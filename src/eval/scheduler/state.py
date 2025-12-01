@@ -106,6 +106,9 @@ def load_running(pid_dir: Path) -> dict[str, RunningEntry]:
             pid = int(lines[0])
         except ValueError:
             continue
+        if not pid_alive(pid):
+            pid_file.unlink(missing_ok=True)
+            continue
         gpu = lines[1].strip() if len(lines) > 1 and lines[1].strip() else None
         log_path: Path | None = None
         if len(lines) > 2 and lines[2].strip():
