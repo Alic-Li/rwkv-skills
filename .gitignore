@@ -11,3 +11,4 @@ wheels/
 /.idea
 /results
 /results_old
+.env

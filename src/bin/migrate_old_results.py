@@ -57,6 +57,113 @@ class LegacyScore:
     source_path: Path
 
 
+def _instruction_following_from_results(path: Path, data: Mapping[str, Any]) -> LegacyScore | None:
+    """Handle legacy ifeval scores.json dumps that lack a ``model`` field.
+
+    Example layout (path like ``ifeval_<model>_no_think/scores.json``):
+    {
+      "input_data": ".../input_data.jsonl",
+      "response_file": ".../<model>_no_think.jsonl",
+      "results": {
+        "strict": {
+          "prompt_accuracy": ...,
+          "instruction_accuracy": ...,
+          "prompt_total": 541,
+          "tier0_breakdown": {...},
+          "tier1_breakdown": {...},
+        },
+        "loose": {...}
+      }
+    }
+    """
+
+    results = data.get("results")
+    if not isinstance(results, Mapping):
+        return None
+    strict = results.get("strict")
+    if not isinstance(strict, Mapping):
+        return None
+
+    prompt_acc = strict.get("prompt_accuracy")
+    instr_acc = strict.get("instruction_accuracy")
+    if not any(isinstance(val, (int, float)) for val in (prompt_acc, instr_acc)):
+        return None
+
+    dataset_slug = None
+    dataset_path = data.get("input_data")
+    if isinstance(dataset_path, str) and dataset_path.strip():
+        dataset_slug = canonical_slug(infer_dataset_slug_from_path(dataset_path))
+    if not dataset_slug:
+        parent_name = path.parent.name
+        if parent_name.startswith("ifeval"):
+            dataset_slug = canonical_slug("ifeval_test")
+    if not dataset_slug:
+        return None
+
+    response_file = data.get("response_file")
+    model_label: str | None = None
+    log_path: str | None = None
+    if isinstance(response_file, str) and response_file.strip():
+        stem = Path(response_file).stem
+        for suffix in ("_no_think", "_think"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        model_label = stem
+        log_path = response_file
+    else:
+        parent_name = path.parent.name
+        if "_" in parent_name:
+            suffix = parent_name.split("_", 1)[1]
+        else:
+            suffix = parent_name
+        for token in ("_no_think", "_think"):
+            if suffix.endswith(token):
+                suffix = suffix[: -len(token)]
+                break
+        model_label = suffix or None
+
+    if not model_label:
+        return None
+
+    metrics: dict[str, float] = {}
+    if isinstance(prompt_acc, (int, float)):
+        metrics["prompt_accuracy"] = float(prompt_acc)
+    if isinstance(instr_acc, (int, float)):
+        metrics["instruction_accuracy"] = float(instr_acc)
+
+    task_details: dict[str, Any] = {}
+    tier0 = strict.get("tier0_breakdown")
+    if isinstance(tier0, Mapping):
+        mapped = {k: float(v) for k, v in tier0.items() if isinstance(v, (int, float))}
+        if mapped:
+            task_details["tier0_accuracy"] = mapped
+    tier1 = strict.get("tier1_breakdown")
+    if isinstance(tier1, Mapping):
+        mapped = {k: float(v) for k, v in tier1.items() if isinstance(v, (int, float))}
+        if mapped:
+            task_details["tier1_accuracy"] = mapped
+    details = task_details or None
+
+    samples = _sanitize_samples(strict.get("prompt_total") or strict.get("instruction_total"))
+    created_at = _resolve_created_at(data, path)
+    log_entry = Path(log_path) if log_path else path
+
+    return LegacyScore(
+        dataset_slug=dataset_slug,
+        is_cot=False,
+        model_basename=model_label,
+        model_label=model_label,
+        metrics=metrics,
+        samples=samples,
+        log_path=_log_path_for(log_entry),
+        task="instruction_following",
+        task_details=details,
+        created_at=created_at,
+        source_path=path,
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Migrate legacy JSON results into results/scores")
     parser.add_argument(
@@ -219,6 +326,8 @@ def _infer_cot_flag(data: dict[str, Any], path: Path) -> bool | None:
 def _infer_type_from_name(path: Path, dataset_slug: str | None) -> tuple[str | None, bool | None]:
     name = path.name.lower()
     canonical = canonical_slug(dataset_slug or "") if dataset_slug else ""
+    if canonical.startswith("ifeval"):
+        return "instruction_following", False
     if name.startswith("cot_llm_judge"):
         return "free_response_judge", True
     if name.startswith("cot_"):
@@ -325,6 +434,21 @@ def _log_path_for(path: Path) -> str:
         return str(path.resolve())
 
 
+def _primary_metric_value(record: LegacyScore) -> float | None:
+    numeric = [float(v) for v in record.metrics.values() if isinstance(v, (int, float))]
+    return max(numeric) if numeric else None
+
+
+def _preference_key(record: LegacyScore) -> tuple[int, float, int, float]:
+    metric = _primary_metric_value(record)
+    return (
+        1 if metric is not None else 0,
+        metric if metric is not None else -1.0,
+        int(record.samples),
+        record.created_at.timestamp(),
+    )
+
+
 def collect_legacy_scores(root: Path) -> list[LegacyScore]:
     scores: list[LegacyScore] = []
     for path in sorted(root.rglob("*.json")):
@@ -332,7 +456,15 @@ def collect_legacy_scores(root: Path) -> list[LegacyScore]:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if not isinstance(raw, dict) or "model" not in raw:
+        if not isinstance(raw, dict):
+            continue
+
+        alt = _instruction_following_from_results(path, raw)
+        if alt:
+            scores.append(alt)
+            continue
+
+        if "model" not in raw:
             continue
         dataset_slug = _dataset_slug_from_record(raw, path)
         if not dataset_slug:
@@ -389,6 +521,7 @@ def collect_legacy_scores(root: Path) -> list[LegacyScore]:
 
 def _deduplicate(records: Iterable[LegacyScore]) -> list[LegacyScore]:
     latest: dict[tuple[str, bool, str, str | None], LegacyScore] = {}
+
     for record in records:
         key = (
             record.dataset_slug,
@@ -397,7 +530,7 @@ def _deduplicate(records: Iterable[LegacyScore]) -> list[LegacyScore]:
             record.task,
         )
         existing = latest.get(key)
-        if existing is None or record.created_at >= existing.created_at:
+        if existing is None or _preference_key(record) > _preference_key(existing):
             latest[key] = record
     return sorted(latest.values(), key=lambda item: (item.dataset_slug, item.model_basename))
 
@@ -406,8 +539,17 @@ def write_scores(records: Iterable[LegacyScore], *, dry_run: bool, overwrite: bo
     ensure_results_structure()
     written = 0
     skipped = 0
+
+    # Multiple tasks for the same dataset/model (e.g., free_response vs free_response_judge)
+    # map to the same score file. Pick the preferred one before writing.
+    best_by_path: dict[Path, LegacyScore] = {}
     for record in records:
         score_file = scores_path(record.dataset_slug, is_cot=record.is_cot, model_name=record.model_basename)
+        current = best_by_path.get(score_file)
+        if current is None or _preference_key(record) > _preference_key(current):
+            best_by_path[score_file] = record
+
+    for score_file, record in sorted(best_by_path.items(), key=lambda item: str(item[0])):
         if score_file.exists() and not overwrite:
             skipped += 1
             if verbose:

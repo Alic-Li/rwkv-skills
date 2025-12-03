@@ -54,8 +54,7 @@ class InferenceEngine:
 class _ActiveTask:
     prompt_index: int
     prompt: str
-    pending_tokens: list[int]
-    state_pos: int
+    pending_tokens: deque[int]
     generated_tokens: list[int]
     new_token: int | None
     finish_reason: str | None
@@ -150,9 +149,10 @@ def _continuous_batching(
     no_penalty = set(sampling.no_penalty_token_ids)
 
     active_tasks: list[_ActiveTask] = []
-    for slot in range(batch_size):
+    for _ in range(batch_size):
         prompt_idx, prompt, tokens = encoded.popleft()
-        active_tasks.append(_ActiveTask(prompt_idx, prompt, tokens, slot, [], None, None))
+        pending = deque(tokens)
+        active_tasks.append(_ActiveTask(prompt_idx, prompt, pending, [], None, None))
 
     pbar = tqdm(
         total=len(prompts),
@@ -169,9 +169,24 @@ def _continuous_batching(
     window_start_tokens = 0
     throughput_ema: float | None = None
 
+    def _reset_slot(slot_idx: int) -> None:
+        occurrence[slot_idx, :] = 0
+        alpha_presence_vector[slot_idx, :] = 0
+        states[0][:, :, slot_idx, :] = 0
+        states[1][:, slot_idx, :, :, :] = 0
+
+    def _remove_slot(remove_idx: int) -> None:
+        last_idx = len(active_tasks) - 1
+        if remove_idx != last_idx:
+            states[0][:, :, remove_idx, :] = states[0][:, :, last_idx, :]
+            states[1][:, remove_idx, :, :, :] = states[1][:, last_idx, :, :, :]
+            occurrence[remove_idx, :] = occurrence[last_idx, :]
+            alpha_presence_vector[remove_idx, :] = alpha_presence_vector[last_idx, :]
+            active_tasks[remove_idx] = active_tasks[last_idx]
+        active_tasks.pop()
+
     while active_tasks:
         accomplished: list[int] = []
-        slots_to_remove: set[int] = set()
 
         for idx, task in enumerate(active_tasks):
             if task.pending_tokens:
@@ -198,33 +213,19 @@ def _continuous_batching(
                 pbar.update(1)
                 if encoded:
                     prompt_idx, prompt, tokens = encoded.popleft()
-                    active_tasks[idx] = _ActiveTask(prompt_idx, prompt, tokens, task.state_pos, [], None, None)
-                    occurrence[task.state_pos, :] = 0
-                    alpha_presence_vector[task.state_pos, :] = 0
-                    states[0][:, :, task.state_pos, :] = 0
-                    states[1][:, task.state_pos, :, :] = 0
+                    pending = deque(tokens)
+                    active_tasks[idx] = _ActiveTask(prompt_idx, prompt, pending, [], None, None)
+                    _reset_slot(idx)
                 else:
                     accomplished.append(idx)
-                    slots_to_remove.add(task.state_pos)
             else:
                 if new_token not in no_penalty:
-                    occurrence[task.state_pos, new_token] += 1.0
-                    alpha_presence_vector[task.state_pos, new_token] = alpha_presence
+                    occurrence[idx, new_token] += 1.0
+                    alpha_presence_vector[idx, new_token] = alpha_presence
 
         if accomplished:
-            for slot in sorted(slots_to_remove, reverse=True):
-                states[0] = torch.cat([states[0][:, :, :slot, :], states[0][:, :, slot + 1 :, :]], dim=2)
-                states[1] = torch.cat([states[1][:, :slot, :, :, :], states[1][:, slot + 1 :, :, :, :]], dim=1)
-                occurrence = torch.cat([occurrence[:slot, :], occurrence[slot + 1 :, :]], dim=0)
-                alpha_presence_vector = torch.cat(
-                    [alpha_presence_vector[:slot, :], alpha_presence_vector[slot + 1 :, :]], dim=0
-                )
-            for idx in sorted(accomplished, reverse=True):
-                del active_tasks[idx]
-            state_positions = sorted({task.state_pos for task in active_tasks})
-            pos_map = {old: new for new, old in enumerate(state_positions)}
-            for task in active_tasks:
-                task.state_pos = pos_map[task.state_pos]
+            for remove_idx in sorted(accomplished, reverse=True):
+                _remove_slot(remove_idx)
 
         now = time.time()
         elapsed = max(now - start_time, 1e-6)
@@ -242,15 +243,21 @@ def _continuous_batching(
         if not active_tasks:
             break
 
-        max_state_idx = max(task.state_pos for task in active_tasks)
-        next_tokens: list[list[int] | None] = [None] * (max_state_idx + 1)
+        next_tokens: list[list[int]] = []
+        active_count = len(active_tasks)
         for task in active_tasks:
-            token = task.pending_tokens.pop(0)
-            next_tokens[task.state_pos] = [token]
+            token = task.pending_tokens.popleft()
+            next_tokens.append([token])
 
-        out = model.forward_batch(next_tokens, states)
+        state_view = [
+            states[0][:, :, :active_count, :],
+            states[1][:, :active_count, :, :, :],
+        ]
+        out = model.forward_batch(next_tokens, state_view)
         occurrence *= sampling.alpha_decay
-        out = out - alpha_presence_vector - occurrence * sampling.alpha_frequency
+        active_occurrence = occurrence[:active_count]
+        active_alpha_presence = alpha_presence_vector[:active_count]
+        out = out - active_alpha_presence - active_occurrence * sampling.alpha_frequency
 
         if ban_tokens:
             out[:, list(ban_tokens)] = -math.inf
@@ -274,8 +281,8 @@ def _continuous_batching(
         else:
             new_tokens = _torch_sample(logits)
         new_tokens = new_tokens.tolist()
-        for task in active_tasks:
-            task.new_token = new_tokens[task.state_pos]
+        for idx, task in enumerate(active_tasks):
+            task.new_token = new_tokens[idx]
 
     pbar.close()
 

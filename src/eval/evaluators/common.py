@@ -10,6 +10,8 @@ import threading
 from queue import Queue
 from typing import Sequence
 
+import orjson
+
 
 @dataclass(slots=True)
 class ProbeConfig:
@@ -70,8 +72,8 @@ class JsonlStageWriter:
     def __init__(self, path: str | Path, *, resume: bool = False):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        mode = "a" if resume else "w"
-        self._fh = self.path.open(mode, encoding="utf-8")
+        mode = "ab" if resume else "wb"
+        self._fh = self.path.open(mode)
         self._queue: Queue[SampleRecord | object] = Queue()
         self._closed = False
         self._worker_exc: BaseException | None = None
@@ -109,8 +111,8 @@ class JsonlStageWriter:
                 try:
                     if item is self._SENTINEL:
                         break
-                    payload = json.dumps(item.as_payload(), ensure_ascii=False)
-                    self._fh.write(payload + "\n")
+                    payload = orjson.dumps(item.as_payload(), option=orjson.OPT_APPEND_NEWLINE)
+                    self._fh.write(payload)
                     self._fh.flush()
                 finally:
                     self._queue.task_done()
@@ -204,8 +206,8 @@ def detect_resume_state(path: str | Path) -> ResumeState:
                 if not line:
                     continue
                 try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
+                    payload = orjson.loads(line)
+                except orjson.JSONDecodeError:
                     continue
                 idx = payload.get("sample_index")
                 if isinstance(idx, int) and idx >= 0:

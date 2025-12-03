@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Sequence
 import uuid
 
-from src.eval.metrics.free_response import evaluate_exact, load_samples
+from src.eval.metrics.free_response import (
+    LLMJudge,
+    LLMJudgeConfig,
+    evaluate_exact,
+    evaluate_with_judge,
+    load_samples,
+)
 from src.eval.results.layout import jsonl_path, write_scores_json
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
 from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
@@ -24,6 +30,22 @@ from src.infer.model import ModelLoadConfig
 PROBE_MIN_SAMPLES = 1
 PROBE_COT_MAX_TOKENS = 256
 PROBE_FINAL_MAX_TOKENS = 64
+
+
+def _load_env_file(path: Path) -> None:
+    """Lightweight .env loader (key=value, optional quotes, ignores comments)."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
 
 
 def _make_probe_output_path(suffix: str = ".jsonl") -> Path:
@@ -61,10 +83,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Compatibility flag (no-op).",
     )
+    parser.add_argument("--judge-model", help="LLM judge model name (env: JUDGE_MODEL / LLM_JUDGE_MODEL)")
+    parser.add_argument("--judge-api-key", help="API key for judge model (env: JUDGE_API_KEY / OPENAI_API_KEY / API_KEY)")
+    parser.add_argument("--judge-base-url", help="Optional base URL for judge model (env: JUDGE_BASE_URL / LLM_JUDGE_BASE_URL / API_BASE)")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _load_env_file(Path(".env"))
     args = parse_args(argv)
     try:
         dataset_path = resolve_or_prepare_dataset(args.dataset)
@@ -107,7 +133,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     samples = load_samples(output_path)
+    judge_model = (
+        args.judge_model
+        or os.environ.get("JUDGE_MODEL")
+        or os.environ.get("LLM_JUDGE_MODEL")
+    )
+    judge_api_key = (
+        args.judge_api_key
+        or os.environ.get("JUDGE_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("API_KEY")
+    )
+    judge_base_url = (
+        args.judge_base_url
+        or os.environ.get("JUDGE_BASE_URL")
+        or os.environ.get("LLM_JUDGE_BASE_URL")
+        or os.environ.get("API_BASE")
+    )
+
     metrics = evaluate_exact(samples)
+    if judge_model and judge_api_key:
+        judge = LLMJudge(
+            LLMJudgeConfig(
+                api_key=judge_api_key,
+                model=judge_model,
+                base_url=judge_base_url,
+            )
+        )
+        metrics = evaluate_with_judge(samples, judge)
     score_path = write_scores_json(
         slug,
         is_cot=True,

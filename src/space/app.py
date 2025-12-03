@@ -241,8 +241,18 @@ def _format_metric_value(value: Any) -> str:
 
 
 def _primary_metric(metrics: dict[str, Any]) -> tuple[str, str] | None:
+    # Prefer common accuracy keys in a stable order so judge results surface first.
+    preferred = ("judge_accuracy", "exact_accuracy", "accuracy", "prompt_accuracy", "instruction_accuracy")
+    for key in preferred:
+        value = metrics.get(key)
+        if isinstance(value, (int, float)):
+            return key, _format_metric_value(value)
     for key, value in metrics.items():
         if isinstance(value, (int, float)):
+            return key, _format_metric_value(value)
+    for key in preferred:
+        value = metrics.get(key)
+        if value is not None:
             return key, _format_metric_value(value)
     for key, value in metrics.items():
         if value is not None:
@@ -401,7 +411,19 @@ def _build_pivot_table(selection: SelectionState) -> tuple[list[str], list[list[
 
         group_key = (entry.model, base, method)
         current = grouped.get(group_key)
-        if current is None or entry.created_at > current.created_at:
+        def _metric_score(item: ScoreEntry | None) -> float | None:
+            if item is None:
+                return None
+            for val in item.metrics.values():
+                if isinstance(val, (int, float)):
+                    return float(val)
+            return None
+
+        cur_score = _metric_score(current)
+        new_score = _metric_score(entry)
+        if current is None or (new_score is not None and (cur_score is None or new_score > cur_score)) or (
+            new_score == cur_score and entry.created_at > current.created_at
+        ):
             grouped[group_key] = entry
 
     ordered_rows = sorted(
