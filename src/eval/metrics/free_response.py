@@ -5,8 +5,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import json
+import re
 from pathlib import Path
 from typing import Iterable
+import unicodedata
 
 import orjson
 
@@ -36,6 +38,19 @@ class FreeResponseMetrics:
     exact_accuracy: float
     judge_accuracy: float | None
     samples: list[FreeResponseSampleResult]
+
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_text(value: str) -> str:
+    """Collapse common formatting artefacts (LaTeX spacing, double spaces, NBSP)."""
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = normalized.replace("\\ ", " ").replace("\u00a0", " ")
+    normalized = _WHITESPACE_RE.sub(" ", normalized.strip())
+    return normalized
 
 
 def load_samples(path: str | Path) -> list[FreeResponseSample]:
@@ -70,7 +85,9 @@ def evaluate_exact(samples: Iterable[FreeResponseSample]) -> FreeResponseMetrics
     total = 0
     correct = 0
     for sample in samples:
-        is_correct = sample.prediction == sample.answer
+        normalized_prediction = _normalize_text(sample.prediction)
+        normalized_answer = _normalize_text(sample.answer)
+        is_correct = normalized_prediction == normalized_answer
         results.append(FreeResponseSampleResult(sample, correct_exact=is_correct))
         total += 1
         if is_correct:

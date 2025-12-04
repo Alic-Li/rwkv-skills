@@ -127,7 +127,9 @@ def _build_dataset_catalogues() -> tuple[
     CODE_DATASET_SLUGS,
 ) = _build_dataset_catalogues()
 
-LLM_JUDGE_DATASET_SLUGS: Final[tuple[str, ...]] = (canonical_slug("math_500_test"),)
+LLM_JUDGE_DATASET_SLUGS: Final[tuple[str, ...]] = tuple(
+    canonical_slug(slug) for slug in ("math_500_test", "answer_judge_test")
+)
 # judge-only 数据集不再调度到 free_response，避免 math_500 反复被 free_response 拉起
 MATH_DATASET_SLUGS_FOR_FREE_RESPONSE: Final[tuple[str, ...]] = tuple(
     slug for slug in MATH_DATASET_SLUGS if slug not in LLM_JUDGE_DATASET_SLUGS

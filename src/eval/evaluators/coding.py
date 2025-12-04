@@ -12,7 +12,7 @@ from src.eval.metrics.code_generation.human_eval import evaluate_functional_corr
 from src.infer.engine import InferenceEngine
 from src.infer.model import ModelLoadConfig, load_rwkv_model
 from src.infer.sampling import SamplingConfig
-from .common import JsonlStageWriter, SampleRecord, StageRecord
+from .common import JsonlStageWriter, SampleRecord, StageRecord, detect_resume_state
 
 DEFAULT_CODE_SAMPLING = SamplingConfig(
     max_generate_tokens=1024,
