@@ -59,6 +59,10 @@
   z-index: 3;
 }
 
+.space-root .space-controls.space-controls--tight {
+  gap: 10px 14px;
+}
+
 .space-root .space-controls .quick-stat {
   display: flex;
   flex-direction: column;
@@ -187,6 +191,18 @@
   line-height: 1.7;
   position: relative;
   z-index: 1;
+}
+
+.space-root .space-refresh-btn button {
+  padding: 6px 10px;
+  font-size: 13px;
+  min-width: 110px;
+}
+
+.space-root .space-export-btn button {
+  padding: 6px 10px;
+  font-size: 13px;
+  min-width: 120px;
 }
 
 .space-root .space-summary-card ul {

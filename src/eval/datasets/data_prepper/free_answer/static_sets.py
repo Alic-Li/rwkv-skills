@@ -18,11 +18,11 @@ STATIC_DATASETS = {
 
 CANONICAL_QUESTION_KEYS: Sequence[str] = ("question", "problem", "prompt", "input")
 CANONICAL_ANSWER_KEYS: Sequence[str] = (
+    "expected_answer",
     "answer",
     "reference_solution",
     "solution",
     "output",
-    "expected_answer",
 )
 
 

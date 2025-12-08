@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Collection, Mapping, Sequence
+from typing import Collection, Mapping, Sequence, Pattern
 
 from .dataset_utils import canonical_slug, safe_slug
 from .jobs import JOB_CATALOGUE, JobSpec
@@ -34,9 +34,11 @@ def build_queue(
     failed: Collection[CompletedKey] | None = None,
     running: Collection[str],
     skip_dataset_slugs: Collection[str],
+    only_dataset_slugs: Collection[str] | None,
     model_select: str,
     min_param_b: float | None,
     max_param_b: float | None,
+    model_name_patterns: Sequence[Pattern[str]] | None = None,
 ) -> list[QueueItem]:
     model_paths = expand_model_paths(model_globs)
     if not model_paths:
@@ -47,7 +49,9 @@ def build_queue(
     completed_set = set(completed)
     failed_set = set(failed or ())
     skip_datasets = {canonical_slug(slug) for slug in skip_dataset_slugs}
+    only_datasets = {canonical_slug(slug) for slug in only_dataset_slugs or []}
     running_set = set(running)
+    compiled_patterns = tuple(model_name_patterns or ())
 
     for job_name in job_order:
         spec = JOB_CATALOGUE.get(job_name)
@@ -55,10 +59,17 @@ def build_queue(
             continue
         for dataset_slug in spec.dataset_slugs:
             canonical_dataset = canonical_slug(dataset_slug)
+            if only_datasets and canonical_dataset not in only_datasets:
+                continue
             if canonical_dataset in skip_datasets:
                 continue
             for model_path in filtered_models:
                 model_slug = safe_slug(model_path.stem)
+                if compiled_patterns:
+                    name = model_path.name
+                    stem = model_path.stem
+                    if not any(pattern.search(name) or pattern.search(stem) for pattern in compiled_patterns):
+                        continue
                 key = CompletedKey(
                     job=job_name,
                     model_slug=model_slug,

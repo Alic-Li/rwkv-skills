@@ -3,6 +3,7 @@ from __future__ import annotations
 """Argparse-based CLI that exposes the scheduler actions."""
 
 import argparse
+import re
 from pathlib import Path
 from typing import Sequence
 
@@ -26,9 +27,14 @@ from .config import (
     DEFAULT_PID_DIR,
     DEFAULT_RUN_LOG_DIR,
 )
-from .dataset_utils import canonical_slug
+from .dataset_utils import canonical_slug, canonicalize_benchmark_list
 from .jobs import JOB_CATALOGUE, JOB_ORDER
 from .models import MODEL_SELECT_CHOICES
+
+
+_KNOWN_DATASET_SLUGS: tuple[str, ...] = tuple(
+    sorted({canonical_slug(slug) for spec in JOB_CATALOGUE.values() for slug in spec.dataset_slugs})
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -69,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch-cache",
         help="自定义 batch profiler 缓存路径 (默认为 log_dir/batch_cache.json)",
     )
+    dispatch_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="忽略 log_dir 中已存在的结果，重新评测并覆盖",
+    )
 
     status_parser = sub.add_parser("status", help="查看正在运行的任务")
     status_parser.add_argument("--pid-dir", default=str(DEFAULT_PID_DIR), help="PID 文件目录")
@@ -95,7 +106,12 @@ def _add_job_filters(parser: argparse.ArgumentParser) -> None:
         "--models",
         nargs="+",
         default=list(DEFAULT_MODEL_GLOBS),
-        help="模型文件 glob（可多次指定）",
+        help="模型文件 glob（用于定位权重，可多次指定；也可配合 --model-regex 过滤文件名）",
+    )
+    parser.add_argument(
+        "--model-regex",
+        nargs="+",
+        help="仅保留文件名（不含路径）匹配任一正则的模型，例如 --model-regex '^rwkv7-.*7\\.2b'",
     )
     parser.add_argument(
         "--model-select",
@@ -131,9 +147,14 @@ def _add_job_filters(parser: argparse.ArgumentParser) -> None:
             help=f"按任务域筛选 job，例如 --domains {'/'.join(domain_choices)}",
         )
     parser.add_argument(
+        "--only-datasets",
+        nargs="+",
+        help="仅运行指定 benchmark（使用数据集名称即可，如 aime24 或 gpqa）",
+    )
+    parser.add_argument(
         "--skip-datasets",
         nargs="+",
-        help="跳过指定数据集 slug（使用 canonical 名称）",
+        help="跳过指定 benchmark（名称即可，无需 *_test 后缀）",
     )
 
 
@@ -153,7 +174,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     job_priority = _resolve_job_priority(getattr(args, "job_order", None), job_list)
 
     model_globs = tuple(getattr(args, "models", list(DEFAULT_MODEL_GLOBS)))
-    skip_dataset_slugs = _canonicalize_slugs(getattr(args, "skip_datasets", None))
+    skip_dataset_slugs = _canonicalize_slugs(parser, getattr(args, "skip_datasets", None))
+    only_dataset_slugs = _canonicalize_slugs(parser, getattr(args, "only_datasets", None))
+    model_name_patterns = _compile_model_patterns(parser, getattr(args, "model_regex", None))
     min_param_b = getattr(args, "min_param_b", None)
     max_param_b = getattr(args, "max_param_b", None)
     model_select = getattr(args, "model_select", "all")
@@ -169,6 +192,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_param_b=max_param_b,
             skip_dataset_slugs=skip_dataset_slugs,
             model_globs=model_globs,
+            only_dataset_slugs=only_dataset_slugs,
+            model_name_patterns=model_name_patterns,
         )
         action_queue(opts)
     elif command == "dispatch":
@@ -186,11 +211,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_param_b=max_param_b,
             skip_dataset_slugs=skip_dataset_slugs,
             model_globs=model_globs,
+            only_dataset_slugs=only_dataset_slugs,
+            model_name_patterns=model_name_patterns,
             dispatch_poll_seconds=int(args.dispatch_poll_seconds),
             gpu_idle_max_mem=int(args.gpu_idle_max_mem),
             skip_missing_dataset=bool(args.skip_missing_dataset),
             clean_param_swap=bool(args.clean_param_swap),
             batch_cache_path=batch_cache,
+            overwrite=bool(args.overwrite),
         )
         action_dispatch(opts)
     elif command == "status":
@@ -233,10 +261,31 @@ def _resolve_job_list(
     return tuple(order)
 
 
-def _canonicalize_slugs(slugs: Sequence[str] | None) -> tuple[str, ...]:
+def _canonicalize_slugs(
+    parser: argparse.ArgumentParser,
+    slugs: Sequence[str] | None,
+) -> tuple[str, ...]:
     if not slugs:
         return tuple()
-    return tuple(sorted({canonical_slug(slug) for slug in slugs}))
+    try:
+        return canonicalize_benchmark_list(slugs, known_slugs=_KNOWN_DATASET_SLUGS)
+    except ValueError as exc:  # pragma: no cover - argparse already prints
+        parser.error(str(exc))
+
+
+def _compile_model_patterns(
+    parser: argparse.ArgumentParser,
+    patterns: Sequence[str] | None,
+) -> tuple[re.Pattern[str], ...]:
+    if not patterns:
+        return tuple()
+    compiled: list[re.Pattern[str]] = []
+    for raw in patterns:
+        try:
+            compiled.append(re.compile(raw))
+        except re.error as exc:  # pragma: no cover - argparse already prints
+            parser.error(f"无效的模型正则 {raw!r}: {exc}")
+    return tuple(compiled)
 
 
 def _resolve_job_priority(priority: Sequence[str] | None, available: Sequence[str]) -> tuple[str, ...] | None:

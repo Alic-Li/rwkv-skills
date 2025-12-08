@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import json
+import csv
+import io
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -442,6 +444,14 @@ def _build_pivot_table(selection: SelectionState) -> tuple[list[str], list[list[
     return headers, rows
 
 
+def _pivot_to_csv(headers: list[str], rows: list[list[Any]]) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
 def _render_pivot_html(headers: list[str], rows: list[list[Any]]) -> str:
     """Render pivot table into a HTML table with predictable column widths.
 
@@ -541,22 +551,25 @@ def _build_dashboard() -> gr.Blocks:
 """
             )
 
-            with gr.Row(elem_classes="space-card space-controls"):
+            with gr.Row(elem_classes="space-card space-controls space-controls--tight"):
                 model_dropdown = gr.Dropdown(
                     label="模型选择",
                     info="默认项会对每个架构 + 参数量组合选取 data_version（G0→…→G1b）最新的模型；手动选择时展示单个模型的最新分数文件。",
                     choices=model_choices,
                     value=AUTO_MODEL_LABEL,
+                    scale=3,
                 )
                 domain_dropdown = gr.Dropdown(
                     label="大领域",
                     choices=domain_choices,
                     value=domain,
+                    scale=2,
                 )
-                refresh_btn = gr.Button("刷新分数", variant="primary")
+                refresh_btn = gr.Button("刷新分数", variant="primary", elem_classes="space-refresh-btn", scale=1)
 
             summary_md = gr.Markdown(summary, elem_classes="space-card space-summary-card")
             table = gr.HTML(pivot_html, elem_classes="space-card space-table-card")
+            download_btn = gr.DownloadButton("导出为 CSV", file_name="rwkv_scores.csv", elem_classes="space-export-btn")
 
             def update_dashboard(selected_model: str, selected_domain: str):
                 load_errors: list[str] = []
@@ -598,6 +611,19 @@ def _build_dashboard() -> gr.Blocks:
                 update_dashboard,
                 inputs=[model_dropdown, domain_dropdown],
                 outputs=[model_dropdown, domain_dropdown, summary_md, table],
+            )
+
+            def export_csv(selected_model: str, selected_domain: str):
+                entries = load_scores()
+                selection_state = _prepare_selection(entries, selected_model, selected_domain)
+                headers, rows = _build_pivot_table(selection_state)
+                csv_text = _pivot_to_csv(headers, rows)
+                return csv_text.encode("utf-8")
+
+            download_btn.click(
+                export_csv,
+                inputs=[model_dropdown, domain_dropdown],
+                outputs=download_btn,
             )
 
     return demo

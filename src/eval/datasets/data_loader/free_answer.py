@@ -22,8 +22,8 @@ CANONICAL_QUESTION_KEYS: Sequence[str] = (
     "text",
 )
 CANONICAL_ANSWER_KEYS: Sequence[str] = (
-    "answer",
     "expected_answer",
+    "answer",
     "reference_answer",
     "reference_solution",
     "solution",

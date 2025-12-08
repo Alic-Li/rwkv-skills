@@ -66,8 +66,12 @@ print(result)
 rwkv-skills-scheduler queue
 rwkv-skills-scheduler dispatch --completion-dir results/completions --run-log-dir results/logs --eval-result-dir results/eval
 ```
+若需无视 `results/scores` 中已存在的结果并强制重跑，可在 dispatch 时附上 `--overwrite`，调度器会在启动前删除旧的 completion / score / eval 产物再重新评测。
+可以用 `--only-datasets aime24 aime25` 这类参数仅重测指定 benchmark（名称即可，不需要 `_test` 后缀），也可以用 `--skip-datasets mmlu` 排除特定集合。若想只跑部分模型，无需填写完整路径，可使用 `--model-regex '^rwkv7-.*7\\.2b$'` 等正则过滤模型文件名，配合默认的权重 glob 即可。
 默认模型 glob 在 `src/eval/scheduler/config.py` 中配置（仅指向仓库内 `weights/rwkv7-*.pth`，请按需覆盖）。调度器依赖的入口脚本已提供：
 `src/bin/eval_multi_choice.py`、`eval_multi_choice_cot.py`、`eval_free_response.py`、`eval_free_response_judge.py`、`eval_instruction_following.py`、`eval_code_human_eval.py`、`eval_code_mbpp.py`。
+其中 `math_500_test` / `answer_judge_test` / `gaokao2023en_test` 这类需要 LLM 评分的数学问答会自动被派发到 `eval_free_response_judge.py`，其余 free-response 仍走 `eval_free_response.py` 的 exact match 逻辑。
+`aime24_test` / `aime25_test` / `beyond_aime_test` / `hmmt_feb25_test` / `brumo25_test` 这类高难度数学集合会在 `eval_free_response.py` 中默认触发 Optuna 采样参数搜索（30 trials，可用 `--param-search-trials` 覆盖），并把最佳 trial 的采样参数写入 score JSON 的 `task_details.param_search`。若想跳过搜索可加 `--no-param-search`，也可用 `--param-search` 在其他数据集上强制开启。
 
 ## HumanEval 代码生成评测
 - 数据集准备：`prepare_dataset("human_eval", Path("data"))` 会下载官方 `HumanEval.jsonl.gz` 并写出 `data/human_eval/test.jsonl`。

@@ -3,6 +3,7 @@ from __future__ import annotations
 """Helpers for dataset slug normalisation compatible with the dispatcher."""
 
 from pathlib import Path
+from typing import Collection, Sequence
 
 
 DATASET_SLUG_ALIASES: dict[str, str] = {
@@ -43,6 +44,14 @@ def canonical_slug(text: str) -> str:
     return DATASET_SLUG_ALIASES.get(slug, slug)
 
 
+def _strip_known_split_suffix(slug: str) -> str:
+    for split in sorted(_KNOWN_SPLIT_NAMES, key=len, reverse=True):
+        suffix = f"_{split}"
+        if slug.endswith(suffix):
+            return slug[: -len(suffix)]
+    return slug
+
+
 def make_dataset_slug(name: str, split: str) -> str:
     return canonical_slug(f"{name}_{split}")
 
@@ -59,9 +68,47 @@ def infer_dataset_slug_from_path(dataset_path: str) -> str:
     return canonical_slug(candidate)
 
 
+def canonicalize_benchmark_list(
+    names: Sequence[str] | None,
+    *,
+    known_slugs: Collection[str],
+) -> tuple[str, ...]:
+    """Map user-provided benchmark names (with or without split suffix) to canonical slugs."""
+
+    if not names:
+        return tuple()
+
+    known_set = {canonical_slug(slug) for slug in known_slugs}
+    base_map: dict[str, str] = {}
+    for slug in known_set:
+        base = _strip_known_split_suffix(slug)
+        base_map.setdefault(base, slug)
+
+    resolved: set[str] = set()
+    unknown: list[str] = []
+    for raw in names:
+        slug = canonical_slug(raw)
+        if slug in known_set:
+            resolved.add(slug)
+            continue
+        base_candidate = _strip_known_split_suffix(slug)
+        match = base_map.get(base_candidate)
+        if match:
+            resolved.add(match)
+            continue
+        unknown.append(raw)
+
+    if unknown:
+        missing = ", ".join(sorted({safe_slug(item) for item in unknown}))
+        raise ValueError(f"未知的 benchmark 名称: {missing}")
+
+    return tuple(sorted(resolved))
+
+
 __all__ = [
     "DATASET_SLUG_ALIASES",
     "canonical_slug",
+    "canonicalize_benchmark_list",
     "infer_dataset_slug_from_path",
     "make_dataset_slug",
     "safe_slug",

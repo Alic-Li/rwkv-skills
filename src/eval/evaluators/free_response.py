@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src.eval.datasets.data_loader.free_answer import JsonlFreeAnswerLoader
 from src.eval.datasets.data_struct.free_answer import FreeAnswerRecord
@@ -47,6 +48,46 @@ class FreeResponsePipelineResult:
     dataset: str
     sample_count: int
     output_path: Path
+
+
+_PREFERRED_ANSWER_KEYS = (
+    "expected_answer",
+    "reference_answer",
+    "target",
+    "final_answer",
+)
+
+
+def _normalize_answer_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized if normalized else None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        normalized = str(value)
+        return normalized.strip() or None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _resolve_reference_answer(record: FreeAnswerRecord) -> str:
+    metadata = record.metadata or {}
+    for key in _PREFERRED_ANSWER_KEYS:
+        normalized = _normalize_answer_value(metadata.get(key))
+        if normalized:
+            return normalized
+    raw_record = metadata.get("raw_record")
+    if isinstance(raw_record, dict):
+        for key in _PREFERRED_ANSWER_KEYS:
+            normalized = _normalize_answer_value(raw_record.get(key))
+            if normalized:
+                return normalized
+    return record.answer
 
 
 class FreeResponsePipeline:
@@ -119,6 +160,7 @@ class FreeResponsePipeline:
             if cot_seq is None or ans_seq is None:
                 continue
             prediction = ans_seq.text.strip()
+            answer_text = _resolve_reference_answer(record)
             stages = [
                 StageRecord(
                     prompt=cot_prompts[local_idx],
@@ -133,10 +175,10 @@ class FreeResponsePipeline:
             ]
             metadata = {
                 "question": record.question,
-                "answer": record.answer,
+                "answer": answer_text,
                 "prediction": prediction,
                 "subject": record.subject,
-                "correct_exact": prediction == record.answer,
+                "correct_exact": prediction == answer_text,
             }
             writer.write(
                 SampleRecord(

@@ -16,7 +16,6 @@ from huggingface_hub.errors import HfHubHTTPError, LocalEntryNotFoundError
 
 
 DEFAULT_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://hf-mirror.com")
-DEFAULT_TOKEN = os.environ.get("HF_TOKEN", "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")
 DEFAULT_TIMEOUT = os.environ.get("HF_HUB_DOWNLOAD_TIMEOUT", "900")
 
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")

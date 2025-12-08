@@ -3,6 +3,7 @@ from __future__ import annotations
 """User-facing actions backed by the scheduler library."""
 
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from .profiler import BatchProfiler
 from .queue import QueueItem, build_queue, sort_queue_items
 from .question_counts import derive_question_counts
 from .state import (
+    CompletedKey,
     RunningEntry,
     ensure_dirs,
     load_running,
@@ -49,6 +51,8 @@ class QueueOptions:
     max_param_b: float | None = None
     skip_dataset_slugs: tuple[str, ...] = ()
     model_globs: tuple[str, ...] = DEFAULT_MODEL_GLOBS
+    only_dataset_slugs: tuple[str, ...] = ()
+    model_name_patterns: tuple[re.Pattern[str], ...] = ()
 
 
 @dataclass(slots=True)
@@ -61,6 +65,7 @@ class DispatchOptions(QueueOptions):
     skip_missing_dataset: bool = False
     clean_param_swap: bool = False
     batch_cache_path: Path | None = None
+    overwrite: bool = False
 
 
 @dataclass(slots=True)
@@ -83,6 +88,21 @@ class LogsOptions:
     rotate_seconds: int = 15
 
 
+def _purge_previous_outputs(log_stem: str, completion_path: Path, opts: DispatchOptions) -> None:
+    score_path = opts.log_dir / f"{log_stem}.json"
+    eval_path = opts.eval_result_dir / f"{log_stem}_results.jsonl"
+    targets = [
+        completion_path,
+        completion_path.with_suffix(completion_path.suffix + ".tmp"),
+        score_path,
+        score_path.with_suffix(score_path.suffix + ".tmp"),
+        eval_path,
+        eval_path.with_suffix(eval_path.suffix + ".tmp"),
+    ]
+    for path in targets:
+        path.unlink(missing_ok=True)
+
+
 def action_queue(opts: QueueOptions) -> list[QueueItem]:
     completed, score_records = scan_completed_jobs(opts.log_dir)
     failed = {record.key for record in score_records.values() if record.missing_artifacts}
@@ -95,9 +115,11 @@ def action_queue(opts: QueueOptions) -> list[QueueItem]:
         failed=failed,
         running=running_entries.keys(),
         skip_dataset_slugs=opts.skip_dataset_slugs,
+        only_dataset_slugs=opts.only_dataset_slugs,
         model_select=opts.model_select,
         min_param_b=opts.min_param_b,
         max_param_b=opts.max_param_b,
+        model_name_patterns=opts.model_name_patterns,
     )
     question_counts = derive_question_counts(score_records)
     pending = sort_queue_items(pending, question_counts=question_counts, job_priority=job_priority_map)
@@ -118,6 +140,7 @@ def action_dispatch(opts: DispatchOptions) -> None:
     pending_since: dict[str, float] = {}
     launch_times: dict[str, float] = {}
     job_metadata: dict[str, dict[str, object]] = {}
+    overwritten_keys: set[CompletedKey] = set()
     completed_log_ids: set[str] | None = None
     pending_notice_printed = False
     failed_announced: set[str] = set()
@@ -148,16 +171,22 @@ def action_dispatch(opts: DispatchOptions) -> None:
             )
             failed_announced.add(job_id)
         running_entries = load_running(opts.pid_dir)
+        completed_for_queue = completed
+        if opts.overwrite:
+            completed_for_queue = {key for key in completed if key in overwritten_keys}
+
         queue = build_queue(
             model_globs=opts.model_globs,
             job_order=opts.job_order,
-            completed=completed,
+            completed=completed_for_queue,
             failed=failed_keys,
             running=running_entries.keys(),
             skip_dataset_slugs=opts.skip_dataset_slugs,
+            only_dataset_slugs=opts.only_dataset_slugs,
             model_select=opts.model_select,
             min_param_b=opts.min_param_b,
             max_param_b=opts.max_param_b,
+            model_name_patterns=opts.model_name_patterns,
         )
         question_counts = derive_question_counts(completed_records)
         queue = sort_queue_items(queue, question_counts=question_counts, job_priority=job_priority)
@@ -293,6 +322,19 @@ def action_dispatch(opts: DispatchOptions) -> None:
                             )
                             continue
                 pid_path.unlink(missing_ok=True)
+
+            if opts.overwrite:
+                _purge_previous_outputs(log_stem, completion_path, opts)
+                print(f"    ↻ overwrite: cleared previous outputs for {log_stem}")
+
+            completed_key = CompletedKey(
+                job=item.job_name,
+                model_slug=item.model_slug,
+                dataset_slug=dataset_slug,
+                is_cot=job.is_cot,
+            )
+            if opts.overwrite:
+                overwritten_keys.add(completed_key)
 
             env = os.environ.copy()
             env.update(

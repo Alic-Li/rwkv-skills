@@ -75,11 +75,14 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/eval", "src/infer", "src/space"]
+packages = ["src"]
 include = [
     "src/space/styles/*.css",
     "src/infer/rwkv7/rwkv_vocab_v20230424.txt",
     "src/infer/rwkv7/cuda/*",
+]
+exclude = [
+    "src/pyvenv.cfg",
 ]
 
 [project.optional-dependencies]
