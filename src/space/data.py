@@ -38,12 +38,14 @@ class ScoreEntry:
     model: str
     metrics: dict[str, Any]
     samples: int
+    problems: int | None
     created_at: datetime
     log_path: str
     cot: bool
     task: str | None
     task_details: dict[str, Any] | None
     path: Path
+    relative_path: Path
     domain: str
     extra: dict[str, Any]
     arch_version: str | None
@@ -122,7 +124,11 @@ def load_scores(scores_root: str | Path = SCORES_ROOT, errors: list[str] | None 
     if not root.exists():
         return []
     entries: list[ScoreEntry] = []
-    for path in sorted(root.glob("*.json")):
+    for path in sorted(root.rglob("*.json")):
+        try:
+            relative_path = path.relative_to(root)
+        except ValueError:
+            relative_path = Path(path.name)
         try:
             with path.open("r", encoding="utf-8") as fh:
                 payload = json.load(fh)
@@ -152,6 +158,19 @@ def load_scores(scores_root: str | Path = SCORES_ROOT, errors: list[str] | None 
             if errors is not None:
                 errors.append(msg)
             samples = 0
+        raw_problems = payload.get("problems")
+        problems: int | None
+        if raw_problems is None:
+            problems = None
+        else:
+            try:
+                problems = int(raw_problems)
+            except (TypeError, ValueError):
+                msg = f"分数文件 {path} 的 problems 字段无法解析: {raw_problems!r}"
+                print(f"[space] {msg}", file=sys.stderr)
+                if errors is not None:
+                    errors.append(msg)
+                problems = None
         log_path = str(payload.get("log_path") or "")
         task_details = payload.get("task_details") if isinstance(payload.get("task_details"), dict) else None
         task = str(payload.get("task")).strip() if payload.get("task") else None
@@ -165,6 +184,7 @@ def load_scores(scores_root: str | Path = SCORES_ROOT, errors: list[str] | None 
             "model",
             "metrics",
             "samples",
+            "problems",
             "created_at",
             "log_path",
             "task",
@@ -179,12 +199,14 @@ def load_scores(scores_root: str | Path = SCORES_ROOT, errors: list[str] | None 
                 model=model,
                 metrics=metrics,
                 samples=samples,
+                problems=problems,
                 created_at=created_at,
                 log_path=log_path,
                 cot=is_cot,
                 task=task,
                 task_details=task_details,
                 path=path,
+                relative_path=relative_path,
                 domain=domain,
                 extra=extra,
                 arch_version=sig.arch,

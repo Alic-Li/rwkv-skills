@@ -221,6 +221,42 @@ def detect_resume_state(path: str | Path) -> ResumeState:
     return ResumeState(next_index=next_index, completed=len(seen), append=next_index > 0)
 
 
+def _max_sample_id(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    max_id: int | None = None
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = orjson.loads(line)
+                except orjson.JSONDecodeError:
+                    continue
+                sample_id = payload.get("sample_id")
+                if isinstance(sample_id, int) and sample_id >= 0:
+                    if max_id is None or sample_id > max_id:
+                        max_id = sample_id
+    except OSError:
+        return None
+    return max_id
+
+
+def ensure_resume_samples_compatible(path: Path, samples_per_task: int) -> None:
+    max_id = _max_sample_id(path)
+    if max_id is None:
+        return
+    required = max_id + 1
+    if samples_per_task >= required:
+        return
+    raise ValueError(
+        f"已有日志 {path} 含 sample_id={max_id}，需要 --samples-per-task 至少 {required} 才能继续；"
+        "请删除旧日志或使用不小于该值的采样次数重试。"
+    )
+
+
 __all__ = [
     "ProbeConfig",
     "StageRecord",
@@ -230,4 +266,5 @@ __all__ = [
     "DebugCaptureConfig",
     "DebugCaptureBuffer",
     "detect_resume_state",
+    "ensure_resume_samples_compatible",
 ]

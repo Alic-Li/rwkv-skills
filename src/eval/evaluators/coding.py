@@ -12,7 +12,7 @@ from src.eval.metrics.code_generation.human_eval import evaluate_functional_corr
 from src.infer.engine import InferenceEngine
 from src.infer.model import ModelLoadConfig, load_rwkv_model
 from src.infer.sampling import SamplingConfig
-from .common import JsonlStageWriter, SampleRecord, StageRecord, detect_resume_state
+from .common import JsonlStageWriter, SampleRecord, StageRecord, detect_resume_state, ensure_resume_samples_compatible
 
 DEFAULT_CODE_SAMPLING = SamplingConfig(
     max_generate_tokens=1024,
@@ -25,6 +25,8 @@ DEFAULT_CODE_SAMPLING = SamplingConfig(
     stop_tokens=(0, 261, 24281),
     pad_zero=True,
 )
+
+DEFAULT_PASS_K = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 
 
 def _compress_newlines(text: str) -> str:
@@ -47,6 +49,7 @@ class CodingPipelineResult:
     dataset: str
     sample_count: int
     output_path: Path
+    problem_count: int
     eval_results: dict[str, float] | None = None
     eval_details_path: Path | None = None
 
@@ -67,18 +70,21 @@ class CodingPipeline:
         sample_limit: int | None = None,
         eval_timeout: float = 3.0,
         eval_workers: int = 4,
-        pass_k: Iterable[int] = (1, 10, 100),
+        pass_k: Iterable[int] = DEFAULT_PASS_K,
     ) -> CodingPipelineResult:
         records, dataset_name = self._load_records(dataset_path, sample_limit)
         if not records:
-            return CodingPipelineResult(dataset_name, 0, Path(output_path))
+            return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
         entries: list[tuple[str, CodeGenerationRecord, int, int]] = []
         for rec_idx, record in enumerate(records):
             for sample_idx in range(samples_per_task):
                 entries.append((_format_prompt(record.prompt), record, rec_idx, sample_idx))
 
-        resume = detect_resume_state(output_path)
+        target_path = Path(output_path)
+        resume = detect_resume_state(target_path)
+        if resume.has_progress:
+            ensure_resume_samples_compatible(target_path, samples_per_task)
         start_index = min(resume.next_index, len(entries))
         if start_index and len(entries):
             remaining = max(len(entries) - start_index, 0)
@@ -93,7 +99,7 @@ class CodingPipeline:
                 progress_desc="Generating code",
             )
             output_by_idx = {item.prompt_index: item for item in outputs}
-            writer = JsonlStageWriter(output_path, resume=resume.has_progress)
+            writer = JsonlStageWriter(target_path, resume=resume.has_progress)
             for local_idx, (prompt_text, record, rec_idx, sample_idx) in enumerate(pending_entries):
                 seq = output_by_idx.get(local_idx)
                 if seq is None:
@@ -140,7 +146,8 @@ class CodingPipeline:
         return CodingPipelineResult(
             dataset=dataset_name,
             sample_count=len(entries),
-            output_path=Path(output_path),
+            output_path=target_path,
+            problem_count=len(records),
             eval_results=eval_results,
             eval_details_path=Path(eval_details_path) if eval_details_path else None,
         )
@@ -156,18 +163,21 @@ class CodingPipeline:
         sample_limit: int | None = None,
         eval_timeout: float = 3.0,
         eval_workers: int = 4,
-        pass_k: Iterable[int] = (1, 10, 100),
+        pass_k: Iterable[int] = DEFAULT_PASS_K,
     ) -> CodingPipelineResult:
         records, dataset_name = self._load_records(dataset_path, sample_limit)
         if not records:
-            return CodingPipelineResult(dataset_name, 0, Path(output_path))
+            return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
         entries: list[tuple[str, CodeGenerationRecord, int, int]] = []
         for rec_idx, record in enumerate(records):
             for sample_idx in range(samples_per_task):
                 entries.append((_format_prompt(record.prompt), record, rec_idx, sample_idx))
 
-        resume = detect_resume_state(output_path)
+        target_path = Path(output_path)
+        resume = detect_resume_state(target_path)
+        if resume.has_progress:
+            ensure_resume_samples_compatible(target_path, samples_per_task)
         start_index = min(resume.next_index, len(entries))
         if start_index and len(entries):
             remaining = max(len(entries) - start_index, 0)
@@ -182,7 +192,7 @@ class CodingPipeline:
                 progress_desc="Generating code",
             )
             output_by_idx = {item.prompt_index: item for item in outputs}
-            writer = JsonlStageWriter(output_path, resume=resume.has_progress)
+            writer = JsonlStageWriter(target_path, resume=resume.has_progress)
             for local_idx, (prompt_text, record, rec_idx, sample_idx) in enumerate(pending_entries):
                 seq = output_by_idx.get(local_idx)
                 if seq is None:
@@ -232,7 +242,8 @@ class CodingPipeline:
         return CodingPipelineResult(
             dataset=dataset_name,
             sample_count=len(entries),
-            output_path=Path(output_path),
+            output_path=target_path,
+            problem_count=len(records),
             eval_results=eval_results,
             eval_details_path=Path(eval_details_path) if eval_details_path else None,
         )

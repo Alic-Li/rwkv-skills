@@ -3,6 +3,7 @@ from __future__ import annotations
 """Run chain-of-thought free-form QA evaluation for RWKV models."""
 
 import argparse
+import json
 import os
 import tempfile
 from dataclasses import asdict, replace
@@ -15,11 +16,18 @@ import optuna
 
 from src.eval.metrics.free_response import (
     FreeResponseMetrics,
+    compute_pass_at_k,
     evaluate_exact,
     load_samples,
     write_sample_results,
 )
-from src.eval.results.layout import eval_details_path, jsonl_path, write_scores_json
+from src.eval.results.layout import (
+    eval_details_path,
+    jsonl_path,
+    param_search_records_path,
+    param_search_trial_path,
+    write_scores_json,
+)
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
 from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
 from src.eval.evaluators.free_response import (
@@ -35,6 +43,7 @@ PROBE_MIN_SAMPLES = 1
 PROBE_COT_MAX_TOKENS = 256
 PROBE_FINAL_MAX_TOKENS = 64
 DEFAULT_PARAM_SEARCH_TRIALS = 30
+PASS_K_LEVELS = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 
 PARAM_SEARCH_DATASETS = {
     "aime24_test",
@@ -94,6 +103,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         help=f"Number of Optuna trials to run when parameter search is enabled (default {DEFAULT_PARAM_SEARCH_TRIALS}).",
     )
+    parser.add_argument(
+        "--samples-per-task",
+        type=int,
+        default=1,
+        help="Number of completions to generate per problem (default 1)",
+    )
     return parser.parse_args(argv)
 
 
@@ -139,6 +154,8 @@ def _should_enable_param_search(args: argparse.Namespace, dataset_slug: str) -> 
         return True
     if getattr(args, "no_param_search", False):
         return False
+    if os.environ.get("RWKV_SKILLS_DISABLE_PARAM_SEARCH") == "1":
+        return False
     return dataset_slug in PARAM_SEARCH_DATASETS
 
 
@@ -154,12 +171,6 @@ def _resolve_param_search_trials(args: argparse.Namespace) -> int:
         except ValueError:
             pass
     return DEFAULT_PARAM_SEARCH_TRIALS
-
-
-def _make_candidate_output_path(base_path: Path, suffix: str, index: int) -> Path:
-    stem = base_path.stem
-    new_name = f"{stem}__{suffix}_{index:02d}{base_path.suffix}"
-    return base_path.with_name(new_name)
 
 
 def _round_params_dict(data: dict[str, object]) -> dict[str, object]:
@@ -182,6 +193,7 @@ def _run_single_eval(
     batch_size: int,
     sample_limit: int | None,
     pad_to_batch: bool,
+    samples_per_task: int,
 ):
     result = pipeline.run(
         dataset_path=dataset_path,
@@ -191,6 +203,7 @@ def _run_single_eval(
         batch_size=batch_size,
         sample_limit=sample_limit,
         pad_to_batch=pad_to_batch,
+        samples_per_task=samples_per_task,
     )
     samples = load_samples(output_path)
     metrics = evaluate_exact(samples)
@@ -201,12 +214,15 @@ def _run_param_search(
     pipeline: FreeResponsePipeline,
     dataset_path: str,
     base_output_path: Path,
+    dataset_slug: str,
+    model_name: str,
     *,
     cot_sampling: SamplingConfig,
     final_sampling: SamplingConfig,
     batch_size: int,
     sample_limit: int | None,
     trials: int,
+    samples_per_task: int,
 ) -> tuple[FreeResponsePipelineResult, FreeResponseMetrics, dict[str, object]]:
     if trials <= 0:
         raise ValueError("参数扫描 trials 必须大于 0")
@@ -217,7 +233,12 @@ def _run_param_search(
     def objective(trial: optuna.Trial) -> float:
         cot_cfg, final_cfg = _suggest_sampling_configs(trial, cot_sampling, final_sampling)
         idx = trial.number + 1
-        candidate_path = _make_candidate_output_path(base_output_path, "trial", idx)
+        candidate_path = param_search_trial_path(
+            dataset_slug,
+            is_cot=True,
+            model_name=model_name,
+            trial_index=idx,
+        )
         candidate_path.unlink(missing_ok=True)
         print(f"🔍 参数扫描 trial {idx}/{trials}: {candidate_path.name}")
         result = pipeline.run(
@@ -227,6 +248,7 @@ def _run_param_search(
             final_sampling=final_cfg,
             batch_size=batch_size,
             sample_limit=sample_limit,
+            samples_per_task=samples_per_task,
         )
         samples = load_samples(candidate_path)
         metrics = evaluate_exact(samples)
@@ -260,6 +282,13 @@ def _run_param_search(
         shutil.copy2(best_path, base_output_path)
     best_result.output_path = base_output_path
 
+    records_path = param_search_records_path(dataset_slug, is_cot=True, model_name=model_name)
+    records_path.parent.mkdir(parents=True, exist_ok=True)
+    with records_path.open("w", encoding="utf-8") as fh:
+        for row in search_records:
+            json.dump(row, fh, ensure_ascii=False)
+            fh.write("\n")
+
     summary = {
         "enabled": True,
         "trials": trials,
@@ -269,7 +298,7 @@ def _run_param_search(
         "best_log_path": best.user_attrs.get("log_path"),
         "best_cot_sampling": best.user_attrs.get("cot_sampling"),
         "best_final_sampling": best.user_attrs.get("final_sampling"),
-        "records": search_records,
+        "records_path": str(records_path),
     }
     return best_result, best_metrics, summary
 
@@ -289,6 +318,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     final_sampling = DEFAULT_FINAL_SAMPLING.clamp(args.final_max_tokens)
     sample_limit: int | None = args.max_samples
     batch_size = max(1, args.batch_size)
+    samples_per_task = max(1, args.samples_per_task)
     if args.probe_only:
         sample_limit = max(args.batch_size, PROBE_MIN_SAMPLES)
         cot_sampling = cot_sampling.clamp(PROBE_COT_MAX_TOKENS)
@@ -302,6 +332,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_size=batch_size,
             sample_limit=sample_limit,
             pad_to_batch=True,
+            samples_per_task=1,
         )
         print(
             "🧪 probe-only run completed: "
@@ -319,11 +350,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             pipeline,
             dataset_path=str(dataset_path),
             base_output_path=out_path,
+            dataset_slug=slug,
+            model_name=Path(args.model_path).stem,
             cot_sampling=cot_sampling,
             final_sampling=final_sampling,
             batch_size=batch_size,
             sample_limit=sample_limit,
             trials=param_trials,
+            samples_per_task=samples_per_task,
         )
         output_path = out_path
     else:
@@ -336,23 +370,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_size=batch_size,
             sample_limit=sample_limit,
             pad_to_batch=False,
+            samples_per_task=samples_per_task,
         )
         output_path = out_path
+
+    pass_metrics = compute_pass_at_k(metrics.samples, PASS_K_LEVELS)
+    if pass_metrics:
+        metrics.pass_at_k = pass_metrics
 
     eval_path = eval_details_path(slug, is_cot=True, model_name=Path(args.model_path).stem)
     write_sample_results(metrics.samples, eval_path)
     task_details = {"eval_details_path": str(eval_path)}
     if param_summary:
         task_details["param_search"] = param_summary
+    metrics_payload = {
+        "exact_accuracy": metrics.exact_accuracy,
+        "judge_accuracy": metrics.judge_accuracy,
+    }
+    if metrics.pass_at_k:
+        metrics_payload.update(metrics.pass_at_k)
+
     score_path = write_scores_json(
         slug,
         is_cot=True,
         model_name=Path(args.model_path).stem,
-        metrics={
-            "exact_accuracy": metrics.exact_accuracy,
-            "judge_accuracy": metrics.judge_accuracy,
-        },
-        samples=len(metrics.samples),
+        metrics=metrics_payload,
+        samples=result.sample_count,
+        problems=result.problem_count,
         log_path=output_path,
         task="free_response",
         task_details=task_details,
@@ -362,10 +406,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         best_acc = param_summary.get("best_exact_accuracy")
         best_trial = param_summary.get("best_trial")
         best_log = param_summary.get("best_log_path")
+        records_path = param_summary.get("records_path")
         if isinstance(best_acc, float):
             print(f"🔍 参数扫描最佳: trial {best_trial} (exact={best_acc:.4f}) -> {best_log}")
         else:
             print(f"🔍 参数扫描最佳: trial {best_trial} -> {best_log}")
+        if records_path:
+            print(f"    📁 详尽记录: {records_path}")
     print(f"📄 eval details saved: {eval_path}")
     print(f"📊 scores saved: {score_path}")
     return 0

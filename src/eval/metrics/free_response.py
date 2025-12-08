@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import json
 import re
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 import unicodedata
 
 import orjson
@@ -24,6 +24,8 @@ class FreeResponseSample:
     prediction: str
     subject: str | None
     cot: str | None
+    problem_index: int | None = None
+    sample_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -38,6 +40,7 @@ class FreeResponseMetrics:
     exact_accuracy: float
     judge_accuracy: float | None
     samples: list[FreeResponseSampleResult]
+    pass_at_k: dict[str, float] | None = None
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -75,6 +78,8 @@ def load_samples(path: str | Path) -> list[FreeResponseSample]:
                     prediction=prediction.strip(),
                     subject=subject,
                     cot=cot,
+                    problem_index=payload.get("problem_index"),
+                    sample_id=payload.get("sample_id"),
                 )
             )
     return samples
@@ -94,6 +99,59 @@ def evaluate_exact(samples: Iterable[FreeResponseSample]) -> FreeResponseMetrics
             correct += 1
     accuracy = correct / total if total else 0.0
     return FreeResponseMetrics(exact_accuracy=accuracy, judge_accuracy=None, samples=results)
+
+
+def _estimate_pass_at_k(total: int, correct: int, k: int) -> float:
+    if total - correct < k:
+        return 1.0
+    product = 1.0
+    for n in range(total - correct + 1, total + 1):
+        product *= 1.0 - k / n
+    return 1.0 - product
+
+
+def compute_pass_at_k(
+    samples: Iterable[FreeResponseSampleResult],
+    ks: Sequence[int],
+    *,
+    use_judge: bool = False,
+) -> dict[str, float]:
+    grouped: dict[str, list[bool]] = {}
+    for result in samples:
+        sample = result.sample
+        flag = result.correct_exact
+        if use_judge and result.judge_correct is not None:
+            flag = result.judge_correct
+        if flag is None:
+            continue
+        flag_bool = bool(flag)
+        if sample.problem_index is not None:
+            key = f"{sample.dataset}:{sample.problem_index}"
+        elif sample.question:
+            key = f"{sample.dataset}:q:{sample.question.strip()}"
+        else:
+            key = f"{sample.dataset}:idx:{sample.sample_index}"
+        grouped.setdefault(key, []).append(flag_bool)
+
+    totals: list[int] = []
+    corrects: list[int] = []
+    for values in grouped.values():
+        totals.append(len(values))
+        corrects.append(sum(1 for flag in values if flag))
+
+    metrics: dict[str, float] = {}
+    for k in ks:
+        k = int(k)
+        if k <= 0:
+            continue
+        acc_values: list[float] = []
+        for total, correct in zip(totals, corrects):
+            if total < k:
+                continue
+            acc_values.append(_estimate_pass_at_k(total, correct, k))
+        if acc_values:
+            metrics[f"pass@{k}"] = sum(acc_values) / len(acc_values)
+    return metrics
 
 
 @dataclass(slots=True)
@@ -183,6 +241,8 @@ def write_sample_results(
                 "cot": sample.cot,
                 "correct_exact": result.correct_exact,
                 "judge_correct": result.judge_correct,
+                "problem_index": sample.problem_index,
+                "sample_id": sample.sample_id,
             }
             fh.write(orjson.dumps(payload, option=orjson.OPT_APPEND_NEWLINE))
     return target
@@ -198,4 +258,5 @@ __all__ = [
     "LLMJudgeConfig",
     "evaluate_with_judge",
     "write_sample_results",
+    "compute_pass_at_k",
 ]

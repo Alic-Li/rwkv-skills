@@ -12,6 +12,7 @@ import uuid
 from src.eval.metrics.free_response import (
     LLMJudge,
     LLMJudgeConfig,
+    compute_pass_at_k,
     evaluate_exact,
     evaluate_with_judge,
     load_samples,
@@ -31,6 +32,7 @@ from src.infer.model import ModelLoadConfig
 PROBE_MIN_SAMPLES = 1
 PROBE_COT_MAX_TOKENS = 256
 PROBE_FINAL_MAX_TOKENS = 64
+PASS_K_LEVELS = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 
 
 def _load_env_file(path: Path) -> None:
@@ -84,6 +86,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Compatibility flag (no-op).",
     )
+    parser.add_argument(
+        "--samples-per-task",
+        type=int,
+        default=1,
+        help="Number of completions to generate per problem (default 1)",
+    )
     parser.add_argument("--judge-model", help="LLM judge model name (env: JUDGE_MODEL / LLM_JUDGE_MODEL)")
     parser.add_argument("--judge-api-key", help="API key for judge model (env: JUDGE_API_KEY / OPENAI_API_KEY / API_KEY)")
     parser.add_argument("--judge-base-url", help="Optional base URL for judge model (env: JUDGE_BASE_URL / LLM_JUDGE_BASE_URL / API_BASE)")
@@ -108,12 +116,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     sample_limit: int | None = args.max_samples
     output_path = out_path
     probe_output_path: Path | None = None
+    samples_per_task = max(1, args.samples_per_task)
     if args.probe_only:
         sample_limit = max(args.batch_size, PROBE_MIN_SAMPLES)
         cot_sampling = cot_sampling.clamp(PROBE_COT_MAX_TOKENS)
         final_sampling = final_sampling.clamp(PROBE_FINAL_MAX_TOKENS)
         probe_output_path = _make_probe_output_path(out_path.suffix or ".jsonl")
         output_path = probe_output_path
+        samples_per_task = 1
 
     result = pipeline.run(
         dataset_path=str(dataset_path),
@@ -122,6 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         final_sampling=final_sampling,
         batch_size=max(1, args.batch_size),
         sample_limit=sample_limit,
+        samples_per_task=samples_per_task,
     )
 
     if args.probe_only:
@@ -153,6 +164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     metrics = evaluate_exact(samples)
+    use_judge = False
     if judge_model and judge_api_key:
         judge = LLMJudge(
             LLMJudgeConfig(
@@ -162,17 +174,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         metrics = evaluate_with_judge(samples, judge)
+        use_judge = True
+    pass_metrics = compute_pass_at_k(metrics.samples, PASS_K_LEVELS, use_judge=use_judge)
+    if pass_metrics:
+        metrics.pass_at_k = pass_metrics
     eval_path = eval_details_path(slug, is_cot=True, model_name=Path(args.model_path).stem)
     write_sample_results(metrics.samples, eval_path)
+    metrics_payload = {
+        "exact_accuracy": metrics.exact_accuracy,
+        "judge_accuracy": metrics.judge_accuracy,
+    }
+    if metrics.pass_at_k:
+        metrics_payload.update(metrics.pass_at_k)
     score_path = write_scores_json(
         slug,
         is_cot=True,
         model_name=Path(args.model_path).stem,
-        metrics={
-            "exact_accuracy": metrics.exact_accuracy,
-            "judge_accuracy": metrics.judge_accuracy,
-        },
-        samples=len(samples),
+        metrics=metrics_payload,
+        samples=result.sample_count,
+        problems=result.problem_count,
         log_path=out_path,
         task="free_response_judge",
         task_details={"eval_details_path": str(eval_path)},

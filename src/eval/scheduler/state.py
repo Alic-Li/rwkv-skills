@@ -58,7 +58,7 @@ def scan_completed_jobs(log_dir: Path) -> tuple[set[CompletedKey], dict[str, Com
     if not log_dir.exists():
         return completed, records
 
-    for json_path in log_dir.glob("*.json"):
+    for json_path in log_dir.rglob("*.json"):
         try:
             raw = json.loads(json_path.read_text(encoding="utf-8"))
         except Exception:
@@ -94,11 +94,13 @@ def scan_completed_jobs(log_dir: Path) -> tuple[set[CompletedKey], dict[str, Com
         job_name = detect_job_from_dataset(dataset_slug, is_cot)
         if not job_name:
             continue
+        raw_problems = raw.get("problems")
         raw_samples = raw.get("samples")
         if isinstance(raw_samples, dict):
             raw_samples = raw_samples.get("total")
+        raw_counts = raw_problems if raw_problems is not None else raw_samples
         try:
-            samples = int(raw_samples) if raw_samples is not None else None
+            samples = int(raw_counts) if raw_counts is not None else None
         except (TypeError, ValueError):
             samples = None
         if samples is not None and samples <= 0:
@@ -109,10 +111,11 @@ def scan_completed_jobs(log_dir: Path) -> tuple[set[CompletedKey], dict[str, Com
             dataset_slug=dataset_slug,
             is_cot=is_cot,
         )
+        job_id = _completed_job_id(key)
         if not missing:
             completed.add(key)
-        records[json_path.stem] = CompletedRecord(
-            job_id=json_path.stem,
+        records[job_id] = CompletedRecord(
+            job_id=job_id,
             key=key,
             score_path=json_path,
             completion_path=completion_path,
@@ -123,6 +126,12 @@ def scan_completed_jobs(log_dir: Path) -> tuple[set[CompletedKey], dict[str, Com
             samples=samples,
         )
     return completed, records
+
+
+def _completed_job_id(key: CompletedKey) -> str:
+    suffix = "cot" if key.is_cot else "nocot"
+    run_slug = safe_slug(f"{key.dataset_slug}_{suffix}_{key.model_slug}")
+    return f"{key.job}__{run_slug}"
 
 
 def _warn_missing_artifact(json_path: Path, category: str, path: Path) -> None:

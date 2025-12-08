@@ -22,7 +22,6 @@ os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 os.environ.setdefault("HF_ENDPOINT", DEFAULT_ENDPOINT)
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", DEFAULT_TIMEOUT)
 os.environ.setdefault("DATASETS_HTTP_TIMEOUT", DEFAULT_TIMEOUT)
-os.environ.setdefault("HF_TOKEN", DEFAULT_TOKEN)
 
 
 DownloadSpec = tuple[str, Sequence[str] | str]

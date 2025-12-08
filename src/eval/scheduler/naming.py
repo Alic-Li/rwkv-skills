@@ -14,9 +14,13 @@ def build_run_slug(model_path: Path, dataset_slug: str, *, is_cot: bool) -> str:
     return safe_slug(base)
 
 
-def build_run_log_name(model_path: Path, dataset_slug: str, *, is_cot: bool) -> str:
-    """Return a stable stem for all artifacts (JSONL / console logs) of a run."""
-    return build_run_slug(model_path, dataset_slug, is_cot=is_cot)
+def build_run_log_name(model_path: Path, dataset_slug: str, *, is_cot: bool) -> Path:
+    """Return a stable relative path stem for artifacts of a run."""
+
+    model_part = safe_slug(model_path.stem)
+    dataset_part = canonical_slug(dataset_slug)
+    stem = f"{dataset_part}__cot" if is_cot else dataset_part
+    return Path(model_part) / stem
 
 
 __all__ = ["build_run_slug", "build_run_log_name"]

@@ -97,6 +97,9 @@ def derive_question_counts(completed_records: Mapping[str, "CompletedRecord"] | 
         if value is None:
             continue
         slug = canonical_slug(record.key.dataset_slug)
+        cap = HISTORICAL_QUESTION_COUNTS.get(slug)
+        if cap is not None and value > cap:
+            value = cap
         previous = counts.get(slug)
         if previous is None or value > previous:
             counts[slug] = value

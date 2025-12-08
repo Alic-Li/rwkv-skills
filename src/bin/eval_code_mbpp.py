@@ -41,6 +41,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-timeout", type=float, default=3.0, help="Seconds per test execution")
     parser.add_argument("--eval-workers", type=int, default=4, help="Parallel workers for evaluation")
     parser.add_argument("--output", help="Output JSONL path (defaults to results/completions layout)")
+    parser.add_argument(
+        "--pass-k",
+        type=int,
+        action="append",
+        help="pass@k values to report (default: 1,2,4,8,16,32,64,128,256)",
+    )
     return parser.parse_args(argv)
 
 
@@ -92,6 +98,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = ModelLoadConfig(weights_path=args.model_path, device=args.device)
     pipeline = CodingPipeline(config)
+    default_pass_k = (1, 2, 4, 8, 16, 32, 64, 128, 256)
+    pass_k = tuple(args.pass_k) if args.pass_k else default_pass_k
     result = pipeline.run_mbpp(
         dataset_path=str(dataset_path),
         output_path=str(out_path),
@@ -101,6 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sample_limit=args.max_samples,
         eval_timeout=args.eval_timeout,
         eval_workers=args.eval_workers,
+        pass_k=pass_k,
     )
 
     print(f"✅ MBPP 生成完成：{result.sample_count} completions -> {result.output_path}")
@@ -115,6 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_name=Path(args.model_path).stem,
         metrics=result.eval_results or {},
         samples=result.sample_count,
+        problems=result.problem_count,
         log_path=out_path,
         task="code_mbpp",
         task_details={

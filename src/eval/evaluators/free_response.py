@@ -11,7 +11,7 @@ from src.eval.datasets.data_struct.free_answer import FreeAnswerRecord
 from src.infer.engine import InferenceEngine
 from src.infer.model import ModelLoadConfig, load_rwkv_model
 from src.infer.sampling import SamplingConfig
-from .common import JsonlStageWriter, SampleRecord, StageRecord, detect_resume_state
+from .common import JsonlStageWriter, SampleRecord, StageRecord, detect_resume_state, ensure_resume_samples_compatible
 
 DEFAULT_COT_PROMPT = """User: <Q>
 
@@ -48,6 +48,7 @@ class FreeResponsePipelineResult:
     dataset: str
     sample_count: int
     output_path: Path
+    problem_count: int
 
 
 _PREFERRED_ANSWER_KEYS = (
@@ -108,28 +109,39 @@ class FreeResponsePipeline:
         dataset_name: str | None = None,
         sample_limit: int | None = None,
         pad_to_batch: bool = False,
+        samples_per_task: int = 1,
     ) -> FreeResponsePipelineResult:
-        records, resolved_name = self._load_records(dataset_path, sample_limit)
+        raw_records, resolved_name = self._load_records(dataset_path, None)
+        if sample_limit is not None and sample_limit > 0:
+            raw_records = raw_records[: min(sample_limit, len(raw_records))]
+        problem_count = len(raw_records)
         dataset_name = dataset_name or resolved_name
-        if pad_to_batch and records and len(records) < batch_size:
-            # 对探测运行：当样本不足以凑满期望的 batch 时重复记录，确保真正以目标 batch 探测显存。
-            original_len = len(records)
+        target_path = Path(output_path)
+        expanded: list[tuple[int, FreeAnswerRecord, int]] = []
+        repeats = max(1, samples_per_task)
+        for idx, record in enumerate(raw_records):
+            for sample_id in range(repeats):
+                expanded.append((idx, record, sample_id))
+        if pad_to_batch and expanded and len(expanded) < batch_size:
+            original_len = len(expanded)
             repeat = (batch_size + original_len - 1) // original_len
-            records = (records * repeat)[:batch_size]
-        if not records:
-            return FreeResponsePipelineResult(dataset_name, 0, Path(output_path))
+            expanded = (expanded * repeat)[:batch_size]
+        if not expanded:
+            return FreeResponsePipelineResult(dataset_name, 0, target_path, problem_count)
 
-        resume = detect_resume_state(output_path)
-        start_index = min(resume.next_index, len(records))
-        if start_index and len(records):
-            remaining = max(len(records) - start_index, 0)
-            print(f"⏩ 自由问答恢复运行：已完成 {start_index}/{len(records)}，剩余 {remaining}")
-        remaining_records = records[start_index:]
-        if not remaining_records:
-            return FreeResponsePipelineResult(dataset_name, len(records), Path(output_path))
+        resume = detect_resume_state(target_path)
+        if resume.has_progress:
+            ensure_resume_samples_compatible(target_path, samples_per_task)
+        start_index = min(resume.next_index, len(expanded))
+        if start_index and len(expanded):
+            remaining = max(len(expanded) - start_index, 0)
+            print(f"⏩ 自由问答恢复运行：已完成 {start_index}/{len(expanded)}，剩余 {remaining}")
+        remaining_entries = expanded[start_index:]
+        if not remaining_entries:
+            return FreeResponsePipelineResult(dataset_name, len(expanded), target_path, problem_count)
 
-        writer = JsonlStageWriter(output_path, resume=resume.has_progress)
-        cot_prompts = [cot_prompt_template.replace("<Q>", record.question) for record in remaining_records]
+        writer = JsonlStageWriter(target_path, resume=resume.has_progress)
+        cot_prompts = [cot_prompt_template.replace("<Q>", record.question) for _, record, _ in remaining_entries]
         cot_outputs = self.engine.generate(
             cot_prompts,
             sampling=cot_sampling,
@@ -139,7 +151,7 @@ class FreeResponsePipeline:
         cot_by_idx = {item.prompt_index: item for item in cot_outputs}
 
         final_prompts: list[str] = []
-        for local_idx, _ in enumerate(remaining_records):
+        for local_idx, _ in enumerate(remaining_entries):
             cot_seq = cot_by_idx.get(local_idx)
             cot_text = cot_seq.text if cot_seq else ""
             prompt = final_answer_template.replace("<Q>", cot_prompts[local_idx]).replace("<COT>", cot_text)
@@ -153,7 +165,7 @@ class FreeResponsePipeline:
         )
         final_by_idx = {item.prompt_index: item for item in final_outputs}
 
-        for local_idx, record in enumerate(remaining_records):
+        for local_idx, (problem_idx, record, sample_id) in enumerate(remaining_entries):
             global_idx = start_index + local_idx
             cot_seq = cot_by_idx.get(local_idx)
             ans_seq = final_by_idx.get(local_idx)
@@ -179,6 +191,8 @@ class FreeResponsePipeline:
                 "prediction": prediction,
                 "subject": record.subject,
                 "correct_exact": prediction == answer_text,
+                "problem_index": problem_idx,
+                "sample_id": sample_id,
             }
             writer.write(
                 SampleRecord(
@@ -189,7 +203,7 @@ class FreeResponsePipeline:
                 )
             )
         writer.close()
-        return FreeResponsePipelineResult(dataset_name, len(records), Path(output_path))
+        return FreeResponsePipelineResult(dataset_name, len(expanded), target_path, problem_count)
 
     def _load_records(
         self, dataset_path: str, sample_limit: int | None

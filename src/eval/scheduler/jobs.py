@@ -63,6 +63,7 @@ class JobSpec:
     probe_max_generate_flag: str | None = None
     probe_dataset_required: bool = False
     probe_extra_args: tuple[str, ...] = ()
+    samples_per_task_flag: str | None = None
 
     @property
     def id_prefix(self) -> str:
@@ -170,6 +171,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         batch_flag="--batch-size",
         probe_flag="--probe-only",
         probe_dataset_required=True,
+        samples_per_task_flag="--samples-per-task",
     ),
     "free_response_judge": JobSpec(
         name="free_response_judge",
@@ -181,6 +183,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         batch_flag="--batch-size",
         probe_flag="--probe-only",
         probe_dataset_required=True,
+        samples_per_task_flag="--samples-per-task",
     ),
     "code_human_eval": JobSpec(
         name="code_human_eval",
@@ -191,6 +194,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         batch_flag="--batch-size",
         probe_flag="--max-samples",
         probe_max_generate_flag="--max-tokens",
+        samples_per_task_flag="--samples-per-task",
     ),
     "code_mbpp": JobSpec(
         name="code_mbpp",
@@ -201,6 +205,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
         batch_flag="--batch-size",
         probe_flag="--max-samples",
         probe_max_generate_flag="--max-tokens",
+        samples_per_task_flag="--samples-per-task",
     ),
     "instruction_following": JobSpec(
         name="instruction_following",

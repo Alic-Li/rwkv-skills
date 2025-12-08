@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """User-facing actions backed by the scheduler library."""
 
+import math
 import os
 import re
 import sys
@@ -88,9 +89,36 @@ class LogsOptions:
     rotate_seconds: int = 15
 
 
-def _purge_previous_outputs(log_stem: str, completion_path: Path, opts: DispatchOptions) -> None:
-    score_path = opts.log_dir / f"{log_stem}.json"
-    eval_path = opts.eval_result_dir / f"{log_stem}_results.jsonl"
+_DEFAULT_AUTO_SAMPLES_CAP = 256
+
+
+def _compute_auto_samples_cap() -> int:
+    raw = os.environ.get("RUN_AUTO_SAMPLES_PER_TASK_MAX")
+    if raw is None or not raw.strip():
+        return _DEFAULT_AUTO_SAMPLES_CAP
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        print(
+            f"⚠️  RUN_AUTO_SAMPLES_PER_TASK_MAX={raw!r} 无法解析，已回退到 {_DEFAULT_AUTO_SAMPLES_CAP}",
+        )
+        return _DEFAULT_AUTO_SAMPLES_CAP
+    return max(1, value)
+
+
+_AUTO_SAMPLES_CAP = _compute_auto_samples_cap()
+
+
+def _derive_auto_samples_per_task(batch_size: int | None, questions: int | None) -> int | None:
+    if batch_size is None or not questions or questions <= 0:
+        return None
+    desired = math.ceil(batch_size / questions)
+    if desired <= 1:
+        return None
+    return min(desired, _AUTO_SAMPLES_CAP)
+
+
+def _purge_previous_outputs(completion_path: Path, score_path: Path, eval_path: Path) -> None:
     targets = [
         completion_path,
         completion_path.with_suffix(completion_path.suffix + ".tmp"),
@@ -101,6 +129,12 @@ def _purge_previous_outputs(log_stem: str, completion_path: Path, opts: Dispatch
     ]
     for path in targets:
         path.unlink(missing_ok=True)
+
+
+def _artifact_path(root: Path, rel: Path, suffix: str) -> Path:
+    target = root / rel.parent / f"{rel.name}{suffix}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def action_queue(opts: QueueOptions) -> list[QueueItem]:
@@ -298,9 +332,11 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 )
                 raise
 
-            log_stem = build_run_log_name(item.model_path, dataset_slug, is_cot=job.is_cot)
-            completion_path = opts.completion_dir / f"{log_stem}.jsonl"
-            console_log_path = _allocate_console_log_path(opts.run_log_dir, log_stem)
+            log_relpath = build_run_log_name(item.model_path, dataset_slug, is_cot=job.is_cot)
+            completion_path = _artifact_path(opts.completion_dir, log_relpath, ".jsonl")
+            score_path = _artifact_path(opts.log_dir, log_relpath, ".json")
+            eval_path = _artifact_path(opts.eval_result_dir, log_relpath, "_results.jsonl")
+            console_log_path = _allocate_console_log_path(opts.run_log_dir, log_relpath)
             pid_path = opts.pid_dir / f"{item.job_id}.pid"
             item.dataset_path = dataset_path
 
@@ -324,8 +360,8 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 pid_path.unlink(missing_ok=True)
 
             if opts.overwrite:
-                _purge_previous_outputs(log_stem, completion_path, opts)
-                print(f"    ↻ overwrite: cleared previous outputs for {log_stem}")
+                _purge_previous_outputs(completion_path, score_path, eval_path)
+                print(f"    ↻ overwrite: cleared previous outputs for {log_relpath}")
 
             completed_key = CompletedKey(
                 job=item.job_name,
@@ -363,6 +399,11 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 env=env,
             )
 
+            questions = question_counts.get(dataset_slug)
+            samples_override = None
+            if job.samples_per_task_flag:
+                samples_override = _derive_auto_samples_per_task(batch_size, questions)
+
             command = build_command(
                 job,
                 item.model_path,
@@ -370,12 +411,17 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 f"cuda:{gpu}",
                 batch_size=batch_size,
                 output_path=completion_path,
+                samples_per_task=samples_override,
             )
             print(f"🚀 Launch {item.job_id} -> cuda:{gpu}")
             print(f"    Dataset: {dataset_path}")
             print(f"    Completion: {completion_path}")
             print(f"    Console: {console_log_path}")
             print(f"    Cmd: {' '.join(command)}")
+            if samples_override:
+                print(
+                    f"    ↪ auto samples-per-task={samples_override} (questions={questions or '?'})"
+                )
             meta = job_metadata.setdefault(item.job_id, {})
             meta.update(
                 job=item.job_name,
@@ -386,6 +432,7 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 log_path=str(completion_path),
                 console_log_path=str(console_log_path),
                 gpu=gpu,
+                samples_per_task=samples_override,
             )
 
             process = launch_job(
@@ -395,7 +442,11 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 log_path=console_log_path,
                 env=env,
             )
-            write_pid_file(opts.pid_dir, item.job_id, process.pid, gpu, console_log_path.name)
+            try:
+                log_reference = str(console_log_path.relative_to(opts.run_log_dir))
+            except ValueError:
+                log_reference = str(console_log_path)
+            write_pid_file(opts.pid_dir, item.job_id, process.pid, gpu, log_reference)
             launch_times[item.job_id] = time.time()
             pending_start = pending_since.pop(item.job_id, None)
             wait_s = time.time() - pending_start if pending_start else None
@@ -410,6 +461,7 @@ def action_dispatch(opts: DispatchOptions) -> None:
                 gpu=f"cuda:{gpu}",
                 pid=process.pid,
                 wait_s=wait_s,
+                samples_per_task=samples_override,
             )
 
         time.sleep(1)
@@ -423,6 +475,7 @@ def build_command(
     *,
     batch_size: int | None = None,
     output_path: Path | None = None,
+    samples_per_task: int | None = None,
 ) -> list[str]:
     base = [DEFAULT_PYTHON, "-m", job.module]
     args = [
@@ -437,6 +490,8 @@ def build_command(
         args.extend([job.batch_flag, str(batch_size)])
     if output_path is not None:
         args.extend(["--output", str(output_path)])
+    if samples_per_task is not None and job.samples_per_task_flag:
+        args.extend([job.samples_per_task_flag, str(samples_per_task)])
     if job.extra_args:
         args.extend(job.extra_args)
     return base + args
@@ -535,18 +590,19 @@ def _clean_param_swap_records(log_dir: Path) -> None:
     print(f"🧹 已清理参数搜索记录: {target}")
 
 
-def _allocate_console_log_path(base_dir: Path, stem: str) -> Path:
-    base_dir.mkdir(parents=True, exist_ok=True)
-    candidate = base_dir / f"{stem}.log"
+def _allocate_console_log_path(base_dir: Path, rel: Path) -> Path:
+    target_dir = base_dir / rel.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    candidate = target_dir / f"{rel.name}.log"
     if not candidate.exists():
         return candidate
     timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    candidate = base_dir / f"{stem}--{timestamp}.log"
+    candidate = target_dir / f"{rel.name}--{timestamp}.log"
     if not candidate.exists():
         return candidate
     attempt = 1
     while True:
-        numbered = base_dir / f"{stem}--{timestamp}-{attempt}.log"
+        numbered = target_dir / f"{rel.name}--{timestamp}-{attempt}.log"
         if not numbered.exists():
             return numbered
         attempt += 1
