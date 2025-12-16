@@ -12,3 +12,4 @@ wheels/
 /results
 /results_old
 .env
+/data

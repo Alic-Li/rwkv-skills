@@ -41,6 +41,10 @@ SPECIAL_DEFAULT_SPLITS: dict[str, str] = {
 CODE_DEFAULT_SPLITS: dict[str, str] = {
     "mbpp": "test",
     "human_eval": "test",
+    "mbpp_plus": "test",
+    "human_eval_plus": "test",
+    "human_eval_fix": "test",
+    "human_eval_cn": "test",
 }
 
 
@@ -143,6 +147,13 @@ if not ifeval_related:
     ifeval_related = [canonical_slug("ifeval_test")]
 INSTRUCTION_FOLLOWING_DATASET_SLUGS: Final[tuple[str, ...]] = tuple(sorted(set(ifeval_related)))
 
+HUMAN_EVAL_CODE_SLUGS: Final[tuple[str, ...]] = tuple(
+    sorted(slug for slug in CODE_DATASET_SLUGS if "human_eval" in slug)
+)
+MBPP_CODE_SLUGS: Final[tuple[str, ...]] = tuple(
+    sorted(slug for slug in CODE_DATASET_SLUGS if slug.startswith("mbpp"))
+)
+
 
 JOB_CATALOGUE: dict[str, JobSpec] = {
     "multi_choice_plain": JobSpec(
@@ -189,7 +200,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
     "code_human_eval": JobSpec(
         name="code_human_eval",
         module="src.bin.eval_code_human_eval",
-        dataset_slugs=(canonical_slug("human_eval_test"),),
+        dataset_slugs=HUMAN_EVAL_CODE_SLUGS or (canonical_slug("human_eval_test"),),
         is_cot=False,
         domain="code",
         batch_flag="--batch-size",
@@ -200,7 +211,7 @@ JOB_CATALOGUE: dict[str, JobSpec] = {
     "code_mbpp": JobSpec(
         name="code_mbpp",
         module="src.bin.eval_code_mbpp",
-        dataset_slugs=(canonical_slug("mbpp_test"),),
+        dataset_slugs=MBPP_CODE_SLUGS or (canonical_slug("mbpp_test"),),
         is_cot=False,
         domain="code",
         batch_flag="--batch-size",

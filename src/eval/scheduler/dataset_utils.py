@@ -12,6 +12,13 @@ DATASET_SLUG_ALIASES: dict[str, str] = {
     "input_data": "ifeval_test",
     "ceval_exam_test": "ceval_test",
     "mbpp": "mbpp_test",
+    "humanevalplus": "human_eval_plus_test",
+    "humaneval_plus": "human_eval_plus_test",
+    "human_eval+": "human_eval_plus_test",
+    "humanevalfix": "human_eval_fix_test",
+    "humaneval_cn": "human_eval_cn_test",
+    "mmmlu": "mmmlu_test",
+    "cmmlu": "cmmlu_test",
 }
 
 _KNOWN_SPLIT_NAMES = {

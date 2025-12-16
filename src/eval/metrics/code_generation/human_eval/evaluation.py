@@ -4,6 +4,7 @@ from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable, List, Union
 import itertools
+import sys
 
 import numpy as np
 import tqdm
@@ -43,6 +44,10 @@ def evaluate_functional_correctness(
     """Evaluate functional correctness of generated samples."""
     if problem_file is None:
         raise ValueError("problem_file is required for HumanEval evaluation")
+    # Some HumanEval+ plus_input cases include very large integers; relax Python's
+    # string-to-int guard so eval does not raise ValueError on those literals.
+    if hasattr(sys, "set_int_max_str_digits"):
+        sys.set_int_max_str_digits(0)  # 0 -> disable limit
 
     problems = read_problems(problem_file)
 

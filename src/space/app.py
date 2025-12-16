@@ -755,72 +755,130 @@ def _collect_subject_metrics(entry: ScoreEntry) -> dict[str, float]:
     return {}
 
 
+
+
+def _update_chart_layout(fig: go.Figure) -> None:
+    """Apply consistent styling to all charts (No internal titles)."""
+    fig.update_layout(
+        title=None, # Remove internal title to prevent overlap/squeeze
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif", size=12, color="#94a3b8"),
+        # Standardize margins now that title is gone
+        margin=dict(t=20, l=20, r=20, b=40),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02, 
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=12),
+        ),
+        hoverlabel=dict(
+            bgcolor="#161b22",
+            font_size=13,
+            font_family="Inter, sans-serif",
+            bordercolor="#30363d",
+        ),
+        # autosize=True # Removed to allow strict Python-side height control
+    )
+
+
 def _build_knowledge_radar(selection: SelectionState) -> go.Figure | None:
     entries = [entry for entry in selection.entries if entry.domain in {"mmlu系列", "multi-choice系列", "其他"}]
     if not entries:
         return None
 
-    scores: dict[str, dict[str, list[float]]] = {}
+    subjects: set[str] = set()
+    subject_scores: dict[str, dict[str, float]] = {}
+
     for entry in entries:
-        subject_scores = _collect_subject_metrics(entry)
-        if not subject_scores:
+        details = entry.task_details or {}
+        acc_map = details.get("accuracy_by_subject")
+        if not isinstance(acc_map, dict):
             continue
-        model_label = _model_display_name(entry.model)
-        scores.setdefault(model_label, {})
-        for subject, value in subject_scores.items():
-            subdomain = _map_subject_to_subdomain(subject)
-            scores[model_label].setdefault(subdomain, []).append(value)
+        model_key = entry.model
+        for raw_name, raw_val in acc_map.items():
+            canonical = _normalize_subject_label(str(raw_name))
+            score = _numeric_value(raw_val)
+            if canonical and score is not None:
+                subjects.add(canonical)
+                subject_scores.setdefault(model_key, {})
+                current = subject_scores[model_key].get(canonical)
+                if current is None or score > current:
+                    subject_scores[model_key][canonical] = score
 
-    if not scores:
+    
+    # --- VISUALIZATION CHANGE: ROTATE TO HORIZONTAL BAR CHART ---
+    # Radar charts with >10 axes are unreadable. Horizontal bars are the professional standard.
+    
+    # We need to flatten the data for a bar chart
+    # x: score, y: subject + model (grouped)
+    
+    # 1. Flatten data
+    # We want to show comparison. 
+    # Option A: Grouped Bar Chart by Subject (X=Score, Y=Subject, Color=Model)
+    
+    bar_data: list[dict[str, Any]] = []
+    
+    # Collect all unique subjects and models
+    for model, domain_scores in subject_scores.items():
+        for subject, score in domain_scores.items():
+            bar_data.append({
+                "model": model,
+                "subject": subject.replace("_", " ").title(), # Clean label
+                "score": score
+            })
+            
+    if not bar_data:
         return None
+        
+    df_bar = pd.DataFrame(bar_data)
+    
+    # Sort subjects by average score across models to make the chart readable
+    subject_avg = df_bar.groupby("subject")["score"].mean().sort_values(ascending=True) # Ascending for Bottom-to-Top in Plotly
+    subject_order = subject_avg.index.tolist()
+    
+    # Model order (consistent coloring)
+    model_order = sorted(df_bar["model"].unique(), key=lambda m: _series_sort_key(m))
 
-    domain_order = [d for d in SUBDOMAIN_ORDER if any(scores[model].get(d) for model in scores)]
-    if not domain_order:
-        return None
+    fig = px.bar(
+        df_bar,
+        x="score",
+        y="subject",
+        color="model",
+        orientation="h", # HORIZONTAL
+        barmode="group",
+        category_orders={"subject": subject_order, "model": model_order},
+        text_auto=".1%", # Show values explicitly
+    )
+    
+    # Dynamic Height Calculation
+    # ~30px per subject * number of models? No, grouped bars.
+    # ~40px per subject group. 
+    # Min height 500.
+    n_subjects = len(subject_order)
+    dynamic_height = max(600, n_subjects * 40 + 100)
 
-    label_to_model: dict[str, str] = {}
-    for entry in entries:
-        label_to_model[_model_display_name(entry.model)] = entry.model
-
-    series: list[go.Scatterpolar] = []
-    def _series_order_key(model_label: str) -> tuple[int, int, int, str]:
-        model = label_to_model.get(model_label, model_label)
-        return _series_sort_key(model)
-
-    for model in sorted(scores, key=_series_order_key):
-        values: list[float | None] = []
-        for domain in domain_order:
-            vals = scores[model].get(domain)
-            if vals:
-                values.append(sum(vals) / len(vals))
-            else:
-                values.append(None)
-        if not any(v is not None for v in values):
-            continue
-        closed_values = values + [values[0]]
-        closed_labels = [dom.replace("_", " ").title() for dom in domain_order] + [
-            domain_order[0].replace("_", " ").title()
-        ]
-        series.append(
-            go.Scatterpolar(
-                r=closed_values,
-                theta=closed_labels,
-                name=model,
-                fill="toself",
-            )
-        )
-
-    if not series:
-        return None
-
-    fig = go.Figure(data=series)
+    _update_chart_layout(fig)
     fig.update_layout(
-        title="Knowledge 子领域雷达图",
-        polar=dict(radialaxis=dict(visible=True, tickformat=".0%")),
-        template="plotly_dark",
-        height=480,
-        margin=dict(t=50, l=40, r=20, b=30),
-        legend_title_text="模型",
+        height=dynamic_height,
+        xaxis=dict(
+            title="Accuracy",
+            tickformat=".0%",
+            range=[0, 1.05], 
+            gridcolor="#30363d",
+        ),
+        yaxis=dict(
+            title="", 
+            tickfont=dict(size=13, family="Inter"),
+            automargin=True,
+        ),
+        margin=dict(t=40, l=20, r=20, b=20),
+        bargap=0.2,
+        bargroupgap=0.1,
     )
     return fig
 
@@ -854,6 +912,7 @@ def _build_aime_plot(selection: SelectionState) -> go.Figure | None:
     df = pd.DataFrame(rows)
     df.sort_values(["series", "pass_k"], inplace=True)
     series_ordered = sorted(series_order.keys(), key=lambda key: series_order[key])
+    
     fig = px.line(
         df,
         x="pass_k",
@@ -861,17 +920,28 @@ def _build_aime_plot(selection: SelectionState) -> go.Figure | None:
         color="series",
         markers=True,
         category_orders={"series": series_ordered},
+        color_discrete_sequence=px.colors.qualitative.Pastel,
     )
+    _update_chart_layout(fig)
     fig.update_layout(
-        title="AIME pass@k 曲线",
-        legend_title_text="数据集 · 模型",
-        template="plotly_dark",
-        height=420,
-        margin=dict(t=40, l=30, r=20, b=30),
+        height=400, # Reduced from 500 to tighten layout
+        margin=dict(t=20, l=30, r=20, b=30), # Tighter margins
     )
-    fig.update_yaxes(title_text="Accuracy", tickformat=".0%", rangemode="tozero")
+    fig.update_yaxes(
+        title_text="Accuracy", 
+        tickformat=".0%", 
+        rangemode="tozero", 
+        gridcolor="rgba(255,255,255,0.05)",
+        zerolinecolor="rgba(255,255,255,0.1)"
+    )
     unique_ks = sorted(df["pass_k"].unique().tolist())
-    fig.update_xaxes(title_text="pass@k", tickmode="array", tickvals=unique_ks)
+    fig.update_xaxes(
+        title_text="pass@k", 
+        tickmode="array", 
+        tickvals=unique_ks,
+        gridcolor="rgba(255,255,255,0.05)",
+        type="log" if len(unique_ks) > 4 and max(unique_ks) > 100 else "linear"
+    )
     return fig
 
 
@@ -884,65 +954,7 @@ def _build_domain_tables(selection: SelectionState) -> dict[str, str]:
     return tables
 
 
-def _build_knowledge_radar(selection: SelectionState) -> go.Figure | None:
-    entries = [entry for entry in selection.entries if entry.domain in {"mmlu系列", "multi-choice系列", "其他"}]
-    if not entries:
-        return None
 
-    subjects: set[str] = set()
-    subject_scores: dict[str, dict[str, float]] = {}
-
-    for entry in entries:
-        details = entry.task_details or {}
-        acc_map = details.get("accuracy_by_subject")
-        if not isinstance(acc_map, dict):
-            continue
-        model_key = entry.model
-        for raw_name, raw_val in acc_map.items():
-            canonical = _normalize_subject_label(str(raw_name))
-            score = _numeric_value(raw_val)
-            if canonical and score is not None:
-                subjects.add(canonical)
-                subject_scores.setdefault(model_key, {})
-                current = subject_scores[model_key].get(canonical)
-                if current is None or score > current:
-                    subject_scores[model_key][canonical] = score
-
-    if not subjects:
-        return None
-
-    axis_labels = [label.title() for label in sorted(subjects)]
-    series: list[go.Scatterpolar] = []
-    for model in selection.model_sequence:
-        scores = subject_scores.get(model)
-        if not scores:
-            continue
-        values: list[float] = []
-        for canonical in sorted(subjects):
-            values.append(scores.get(canonical, 0.0))
-        closed_values = values + [values[0]]
-        closed_labels = axis_labels + [axis_labels[0]]
-        series.append(
-            go.Scatterpolar(
-                r=closed_values,
-                theta=closed_labels,
-                name=_model_display_name(model),
-                fill="toself",
-            )
-        )
-
-    if not series:
-        return None
-
-    fig = go.Figure(data=series)
-    fig.update_layout(
-        title="Knowledge 子领域雷达图（accuracy_by_subject）",
-        polar=dict(radialaxis=dict(visible=True, tickformat=".0%", range=[0, 1])),
-        template="plotly_dark",
-        margin=dict(t=50, l=40, r=20, b=30),
-        legend_title_text="模型",
-    )
-    return fig
 
 
 def _build_instruction_bar(selection: SelectionState) -> go.Figure | None:
@@ -980,6 +992,7 @@ def _build_instruction_bar(selection: SelectionState) -> go.Figure | None:
     domain_order = [d.replace("_", " ") for d in INSTRUCTION_DOMAIN_ORDER if d.replace("_", " ") in df["domain"].unique()]
     series_order = sorted(df["model"].unique(), key=lambda label: _series_sort_key(label_to_model.get(label, label)))
     df.sort_values(["domain", "model"], inplace=True)
+    
     fig = px.bar(
         df,
         x="domain",
@@ -989,15 +1002,21 @@ def _build_instruction_bar(selection: SelectionState) -> go.Figure | None:
         category_orders={"domain": domain_order, "model": series_order},
         hover_data=None,
     )
+    _update_chart_layout(fig)
     fig.update_layout(
-        title="Instruction Following 子领域",
-        template="plotly_dark",
-        height=420,
-        margin=dict(t=50, l=40, r=20, b=30),
-        legend_title_text="模型",
+        height=400, # Reduced
+        margin=dict(t=20, l=40, r=20, b=60), 
     )
-    fig.update_yaxes(title_text="Accuracy", tickformat=".0%", rangemode="tozero")
-    fig.update_xaxes(title_text="子领域")
+    fig.update_yaxes(
+        title_text="Accuracy", 
+        tickformat=".0%", 
+        rangemode="tozero",
+        gridcolor="rgba(255,255,255,0.05)"
+    )
+    fig.update_xaxes(
+        title_text=None,
+        tickangle=-45
+    )
     return fig
 
 
@@ -1028,6 +1047,7 @@ def _build_coding_bar(selection: SelectionState) -> go.Figure | None:
     df.sort_values(["dataset", "model"], inplace=True)
     label_to_model = {_model_display_name(e.model): e.model for e in entries}
     series_order = sorted(df["model"].unique(), key=lambda label: _series_sort_key(label_to_model.get(label, label)))
+    
     fig = px.bar(
         df,
         x="dataset",
@@ -1037,17 +1057,18 @@ def _build_coding_bar(selection: SelectionState) -> go.Figure | None:
         hover_data=["metric"],
         text_auto=".1%",
         category_orders={"model": series_order},
+        color_discrete_sequence=px.colors.qualitative.Pastel,
     )
-    fig.update_layout(
-        title="Coding 关键指标（优先 pass@1，其次 pass@k）",
-        template="plotly_dark",
-        height=420,
-        margin=dict(t=50, l=40, r=20, b=30),
-        legend_title_text="模型",
-    )
+    _update_chart_layout(fig)
+    fig.update_layout(height=400) # Reduced
     fig.update_traces(textposition="outside", cliponaxis=False)
-    fig.update_yaxes(title_text="Accuracy", tickformat=".0%", rangemode="tozero")
-    fig.update_xaxes(title_text="基准")
+    fig.update_yaxes(
+        title_text="Accuracy", 
+        tickformat=".0%", 
+        rangemode="tozero",
+        gridcolor="rgba(255,255,255,0.05)"
+    )
+    fig.update_xaxes(title_text=None)
     return fig
 
 
@@ -1106,57 +1127,49 @@ def _pivot_to_csv(headers: list[str], rows: list[list[Any]]) -> str:
     return buffer.getvalue()
 
 
-def _render_pivot_html(headers: list[str], rows: list[list[Any]], *, title: str = "明细") -> str:
-    """Render pivot table into a HTML table with predictable column widths.
+def _export_selection_csv(selection: SelectionState) -> str:
+    """Build a temporary CSV file for the current selection."""
+    headers, rows = _build_pivot_table(selection)
+    csv_text = _pivot_to_csv(headers, rows)
+    temp_dir = Path(tempfile.mkdtemp(prefix="rwkv_space_"))
+    path = temp_dir / "rwkv_scores.csv"
+    path.write_text(csv_text, encoding="utf-8")
+    return str(path)
 
-    要求：
-    - Benchmark 列：自适应整段名称，保持单行；
-    - 模型列：宽度一致，按表头 / 单元格里的最长字符串估算；
-    - 整个表格可以水平滚动，确保所有文本都完整显示。
-    """
+
+def _render_pivot_html(headers: list[str], rows: list[list[Any]], *, title: str = "明细") -> str:
+    """Render pivot table into a HTML table with predictable column widths."""
     if not headers:
         return '<div class="space-table-empty">当前筛选条件下没有数据。</div>'
 
-    def _token_length(token: Any) -> int:
-        return len(_html(token))
-
-    col_lengths = [_token_length(title) for title in headers]
-    for row in rows:
-        for idx, cell in enumerate(row):
-            if idx < len(col_lengths):
-                col_lengths[idx] = max(col_lengths[idx], _token_length(cell))
-
-    benchmark_width = max(col_lengths[0] + 2, 14)
-    model_col_width = max(max(col_lengths[1:], default=10) + 2, 10)
-
-    header_cells = "".join(f"<th>{_html(title)}</th>" for title in headers)
+    header_cells = "".join(f'<th title="{_html(title)}">{_html(title)}</th>' for title in headers)
     body_rows: list[str] = []
     for row in rows:
         cells: list[str] = []
         for idx, cell in enumerate(row):
-            cls = ' class="cell-model"' if idx == 0 else ""
-            cells.append(f"<td{cls}>{_html(cell)}</td>")
+            # First cell is model name, others are metrics
+            # Add TITLE attribute for hover tooltips
+            cell_html = _html(cell)
+            cells.append(f'<td title="{cell_html}">{cell_html}</td>')
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
     rows_html = "".join(body_rows) if body_rows else '<tr><td colspan="999">当前筛选条件下没有数据。</td></tr>'
 
-    colgroup = (
-        '<col class="col-model" />'
-        + "".join('<col class="col-metric" />' for _ in headers[1:])
-    )
-
     return f"""
-<div class="space-table-title">{_html(title)}</div>
-<div class="space-table-grid" style="--model-col-width: {benchmark_width}ch; --metric-col-width: {model_col_width}ch;">
-  <table>
-    <colgroup>{colgroup}</colgroup>
-    <thead>
-      <tr>{header_cells}</tr>
-    </thead>
-    <tbody>
-      {rows_html}
-    </tbody>
-  </table>
+<div class="space-section-card">
+    <div class="space-header" style="padding:0; margin-bottom:16px;">
+        <h3 style="font-size:18px; color:var(--space-text-primary); margin:0;">{_html(title)}</h3>
+    </div>
+    <div class="space-table-wrapper">
+      <table>
+        <thead>
+          <tr>{header_cells}</tr>
+        </thead>
+        <tbody>
+          {rows_html}
+        </tbody>
+      </table>
+    </div>
 </div>
 """.strip()
 
@@ -1190,86 +1203,119 @@ def _build_dashboard() -> gr.Blocks:
     instruction_bar_value = _build_instruction_bar(selection)
     coding_bar_value = _build_coding_bar(selection)
     coding_example_value = _load_coding_example(selection)
+    csv_export_path = _export_selection_csv(selection)
 
-    # Gradio 5.50 不再可靠支持 Blocks(elem_id=...) 作为 CSS 锚点，
-    # 所以这里用一个带有自定义 class 的 Column 作为样式作用域根节点。
-    with gr.Blocks(css=css, theme=gr.themes.Soft()) as demo:
+    # Inject JS to force dark mode
+    js_func = """
+    () => {
+        document.body.classList.add('dark');
+        document.querySelector('gradio-app').style.backgroundColor = 'var(--space-bg-color)';
+    }
+    """
+
+    with gr.Blocks(css=css, theme=gr.themes.Base(), js=js_func) as demo:
         with gr.Column(elem_classes="space-root"):
+            
+            # Header
             gr.HTML(
                 """
-<div class="space-card space-hero">
-  <div>
+<div class="space-header">
     <h1>RWKV Skills · Space</h1>
-    <div class="hero-subtitle">以最新分数为基准，快速浏览各评测领域。</div>
-  </div>
+    <div class="subtitle">以最新分数为基准，快速浏览各评测领域。</div>
 </div>
 """
             )
 
-            with gr.Row(elem_classes="space-card space-controls space-controls--tight"):
-                model_dropdown = gr.Dropdown(
-                    label="模型选择",
-                    info="默认项会对每个架构 + 参数量组合选取 data_version（G0→…→G1b）最新的模型；手动选择时展示单个模型的最新分数文件。",
-                    choices=model_choices,
-                    value=AUTO_MODEL_LABEL,
-                    scale=3,
-                )
-                refresh_btn = gr.Button("刷新分数", variant="primary", elem_classes="space-refresh-btn", scale=1)
-                download_btn = gr.DownloadButton("导出为 CSV", elem_classes="space-export-btn", scale=1)
+            # Controls
+            with gr.Group(elem_classes="space-controls-card"):
+                with gr.Row():
+                    model_dropdown = gr.Dropdown(
+                        label="模型选择",
+                        info="默认项会对每个架构 + 参数量组合选取 data_version（G0→…→G1b）最新的模型；手动选择时展示单个模型的最新分数文件。",
+                        choices=model_choices,
+                        value=AUTO_MODEL_LABEL,
+                        scale=3,
+                        elem_classes="space-dropdown"
+                    )
+                    refresh_btn = gr.Button("刷新分数", variant="primary", scale=1)
+                    download_btn = gr.DownloadButton("导出为 CSV", scale=1, value=csv_export_path)
 
-            summary_md = gr.Markdown(summary, elem_classes="space-card space-summary-card")
+                summary_md = gr.Markdown(summary, elem_classes="space-info-card")
+
             tables: dict[str, gr.HTML] = {}
-            aime_plot: gr.Plot | None = None
-            knowledge_radar: gr.Plot | None = None
-            instruction_bar: gr.Plot | None = None
-            coding_bar: gr.Plot | None = None
+            plot_aime: gr.Plot | None = None
+            plot_knowledge: gr.Plot | None = None
+            plot_instruction: gr.Plot | None = None
+            plot_coding: gr.Plot | None = None
             coding_example: gr.Markdown | None = None
 
-            with gr.Tabs(elem_classes="space-card space-table-card"):
+            # Main Content Tabs
+            with gr.Tabs(elem_classes="tabs"):
                 for group in DOMAIN_GROUPS:
                     with gr.Tab(group["label"]):
+                        
+                        # Use a spacer
+                        gr.HTML('<div class="space-spacer"></div>')
+                        
+                        # Charts Section
                         if group["key"] == "knowledge":
-                            knowledge_radar = gr.Plot(
-                                value=knowledge_radar_value,
-                                show_label=False,
-                                elem_classes="space-table-card",
-                            )
+                            with gr.Column(elem_classes="space-section-card"):
+                                gr.Markdown("### Knowledge Accuracy by Subject (Horizontal Bar)", elem_classes="chart-title")
+                                plot_knowledge = gr.Plot(
+                                    value=knowledge_radar_value,
+                                    show_label=False,
+                                    elem_classes="space-chart-container",
+                                )
+                        
                         if group["key"] == "math":
-                            aime_plot = gr.Plot(
-                                value=aime_plot_value,
-                                show_label=False,
-                                elem_classes="space-table-card",
-                            )
+                            with gr.Column(elem_classes="space-section-card"):
+                                gr.Markdown("### AIME pass@k Curve", elem_classes="chart-title")
+                                plot_aime = gr.Plot(
+                                    value=aime_plot_value,
+                                    show_label=False,
+                                    elem_classes="space-chart-container",
+                                )
+
                         if group["key"] == "coding":
-                            coding_bar = gr.Plot(
-                                value=coding_bar_value,
-                                show_label=False,
-                                elem_classes="space-table-card",
-                            )
-                            coding_example = gr.Markdown(
-                                value=coding_example_value or "暂未找到 Coding 示例。",
-                                elem_classes="space-card space-summary-card",
-                            )
+                            with gr.Column(elem_classes="space-section-card"):
+                                gr.Markdown("### Coding Benchmark (pass@1 priority)", elem_classes="chart-title")
+                                plot_coding = gr.Plot(
+                                    value=coding_bar_value,
+                                    show_label=False,
+                                    elem_classes="space-chart-container",
+                                )
+                            with gr.Column(elem_classes="space-section-card"):
+                                coding_example = gr.Markdown(
+                                    value=coding_example_value or "暂未找到 Coding 示例。",
+                                    elem_classes="prose",
+                                )
+
                         if group["key"] == "instruction_following":
-                            instruction_bar = gr.Plot(
-                                value=instruction_bar_value,
-                                show_label=False,
-                                elem_classes="space-table-card",
-                            )
+                            with gr.Column(elem_classes="space-section-card"):
+                                plot_instruction = gr.Plot(
+                                    value=instruction_bar_value,
+                                    show_label=False,
+                                    elem_classes="space-chart-container",
+                                )
+
+                        # Table Section
+                        # Tables already rendered with .space-section-card in _render_pivot_html wrapper if we want consistent look,
+                        # BUT _render_pivot_html returns a string HTML.
+                        # I updated _render_pivot_html to include the card wrapper div.
                         tables[group["key"]] = gr.HTML(
                             domain_tables.get(group["key"], _render_pivot_html([], [])),
-                            elem_classes="space-table-card",
                         )
-
+            
             def update_dashboard(selected_model: str):
                 load_errors: list[str] = []
                 entries = load_scores(errors=load_errors)
                 model_choices = _compute_choices(entries)
                 dropdown_value = selected_model if selected_model in model_choices else AUTO_MODEL_LABEL
-
+                
                 selection_state = _prepare_selection(entries, dropdown_value)
                 warnings = load_errors + ([style_warning] if style_warning else [])
-
+                csv_path = _export_selection_csv(selection_state)
+                
                 summary_value = _render_summary(
                     all_entries=entries,
                     visible=selection_state.entries,
@@ -1285,73 +1331,72 @@ def _build_dashboard() -> gr.Blocks:
 
                 outputs: list[Any] = [
                     gr.update(choices=model_choices, value=selection_state.dropdown_value),
+                    gr.update(value=csv_path),
                     gr.update(value=summary_value),
                 ]
                 for group in DOMAIN_GROUPS:
                     outputs.append(gr.update(value=domain_table_values.get(group["key"])))
-                    if group["key"] == "knowledge" and knowledge_radar is not None:
+                    if group["key"] == "knowledge" and plot_knowledge is not None:
                         outputs.append(gr.update(value=knowledge_radar_fig))
-                    if group["key"] == "math" and aime_plot is not None:
+                    if group["key"] == "math" and plot_aime is not None:
                         outputs.append(gr.update(value=aime_plot_fig))
-                    if group["key"] == "coding" and coding_bar is not None:
+                    if group["key"] == "coding" and plot_coding is not None:
                         outputs.append(gr.update(value=coding_bar_fig))
                         if coding_example is not None:
                             outputs.append(gr.update(value=coding_example_md))
-                    if group["key"] == "instruction_following" and instruction_bar is not None:
+                    if group["key"] == "instruction_following" and plot_instruction is not None:
                         outputs.append(gr.update(value=instruction_bar_fig))
                 return outputs
 
             model_dropdown.change(
                 update_dashboard,
                 inputs=[model_dropdown],
-                outputs=[
+                outputs=[c for c in [
                     model_dropdown,
+                    download_btn,
                     summary_md,
                     tables["knowledge"],
-                    knowledge_radar,
+                    plot_knowledge,
                     tables["math"],
-                    aime_plot,
+                    plot_aime,
                     tables["coding"],
-                    coding_bar,
+                    plot_coding,
                     coding_example,
                     tables["instruction_following"],
-                    instruction_bar,
+                    plot_instruction,
                     tables["function_call"],
-                ],
+                ] if c is not None],
             )
             refresh_btn.click(
                 update_dashboard,
                 inputs=[model_dropdown],
-                outputs=[
+                outputs=[c for c in [
                     model_dropdown,
+                    download_btn,
                     summary_md,
                     tables["knowledge"],
-                    knowledge_radar,
+                    plot_knowledge,
                     tables["math"],
-                    aime_plot,
+                    plot_aime,
                     tables["coding"],
-                    coding_bar,
+                    plot_coding,
                     coding_example,
                     tables["instruction_following"],
-                    instruction_bar,
+                    plot_instruction,
                     tables["function_call"],
-                ],
+                ] if c is not None],
             )
 
             def export_csv(selected_model: str):
                 entries = load_scores()
                 selection_state = _prepare_selection(entries, selected_model)
-                headers, rows = _build_pivot_table(selection_state)
-                csv_text = _pivot_to_csv(headers, rows)
-                temp_dir = Path(tempfile.mkdtemp(prefix="rwkv_space_"))
-                path = temp_dir / "rwkv_scores.csv"
-                path.write_text(csv_text, encoding="utf-8")
-                return str(path)
+                return _export_selection_csv(selection_state)
 
             download_btn.click(
                 export_csv,
                 inputs=[model_dropdown],
                 outputs=download_btn,
+                queue=False,
             )
 
     return demo

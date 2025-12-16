@@ -138,13 +138,29 @@ def write_scores_json(
     }
     """
 
+    def _normalize_jsonable(value):  # noqa: ANN001
+        import numpy as np  # local import: avoids import cost in CLI startup
+
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            return {k: _normalize_jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_normalize_jsonable(v) for v in value]
+        return value
+
     ensure_results_structure()
     path = scores_path(dataset_slug, is_cot=is_cot, model_name=model_name)
     payload = {
         "dataset": dataset_slug,
         "model": model_name,
         "cot": bool(is_cot),
-        "metrics": metrics,
+        "metrics": _normalize_jsonable(metrics),
         "samples": int(samples),
         "created_at": datetime.utcnow().replace(microsecond=False).isoformat() + "Z",
         "log_path": str(log_path),

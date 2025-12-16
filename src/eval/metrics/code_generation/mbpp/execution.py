@@ -3,11 +3,13 @@ from __future__ import annotations
 import contextlib
 import faulthandler
 import io
+import linecache
 import multiprocessing
 import os
 import platform
 import signal
 import tempfile
+import traceback
 from typing import Dict, Optional
 
 
@@ -45,12 +47,23 @@ def unsafe_execute(problem: Dict, completion: str, timeout: float, result):
             exec_globals: dict = {}
             with swallow_io():
                 with time_limit(timeout):
-                    exec(check_program, exec_globals)
+                    filename = "<rwkv_skills_mbpp>"
+                    linecache.cache[filename] = (
+                        len(check_program),
+                        None,
+                        check_program.splitlines(keepends=True),
+                        filename,
+                    )
+                    exec(compile(check_program, filename, "exec"), exec_globals)
             result.append("passed")
         except TimeoutException:
             result.append("timed out")
         except BaseException as exc:  # noqa: BLE001
-            result.append(f"failed: {exc}")
+            exc_type = type(exc).__name__
+            exc_msg = str(exc).strip()
+            header = f"failed: {exc_type}: {exc_msg}" if exc_msg else f"failed: {exc_type}"
+            tb = traceback.format_exc().rstrip()
+            result.append(f"{header}\n{tb}" if tb else header)
 
         shutil.rmtree = rmtree
         os.rmdir = rmdir

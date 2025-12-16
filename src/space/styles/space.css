@@ -1,332 +1,285 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 
+:root {
+  /* GitHub Dark Dimmed Palette - Professional & Flat */
+  --space-bg-color: #0d1117;
+  /* Main Background */
+  --space-card-bg: #161b22;
+  /* Card Background */
+  --space-border-color: #30363d;
+  /* Subtle Border */
+  --space-header-bg: #21262d;
+  /* Slightly lighter for headers */
+
+  --space-text-primary: #c9d1d9;
+  /* High readability text */
+  --space-text-secondary: #8b949e;
+  /* Muted text */
+  --space-accent: #58a6ff;
+  /* GitHub Blue */
+  --space-success: #238636;
+
+  --space-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --space-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Gradio overrides */
+  --body-background-fill: var(--space-bg-color) !important;
+  --background-fill-primary: var(--space-card-bg) !important;
+  --background-fill-secondary: var(--space-bg-color) !important;
+  /* No distinct secondary fill, keep it flat */
+  --block-padding: 0 !important;
+  --block-border-width: 0 !important;
+  --container-radius: 6px !important;
+}
+
+body {
+  background-color: var(--space-bg-color) !important;
+  color: var(--space-text-primary) !important;
+  font-family: var(--space-font-sans) !important;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.gradio-container {
+  background: var(--space-bg-color) !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Main Layout */
 .space-root {
-  --space-bg: radial-gradient(circle at 20% 20%, rgba(66, 121, 255, 0.12), transparent 35%), radial-gradient(circle at 80% 0%, rgba(30, 182, 170, 0.15), transparent 30%), linear-gradient(135deg, #0a1224 0%, #0d1b2f 60%, #0b131f 100%);
-  --space-panel: rgba(18, 29, 48, 0.85);
-  --space-border: rgba(255, 255, 255, 0.08);
-  --space-text: #e8edf7;
-  --space-muted: #9fb0c5;
-  --space-accent: linear-gradient(120deg, #2dd4bf, #60a5fa);
-  --space-accent-solid: #3fd6c9;
-  --space-card-glow: 0 10px 40px rgba(63, 214, 201, 0.08);
-  font-family: "Space Grotesk", "Segoe UI", "San Francisco", system-ui, -apple-system, sans-serif;
-  color: var(--space-text);
-  background: var(--space-bg);
-  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  /* Standard professional gap */
+  padding: 32px 40px;
+  max-width: 1800px;
+  /* Much wider max-width */
+  margin: 0 auto;
   min-height: 100vh;
   box-sizing: border-box;
 }
 
-.space-root .space-hero {
-  padding: 8px 0 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
+/* 1. Header */
+.space-header {
+  text-align: left;
+  /* Professional dashboards often align left, but center is fine. Keeping Center based on history, but cleaner. */
+  text-align: center;
+  margin-bottom: 32px;
 }
 
-.space-root .space-hero h1 {
-  font-size: 28px;
-  letter-spacing: 0.5px;
-  margin: 0;
-  color: #e5f3ff; /* 直接使用高对比度文字颜色，避免在部分环境下被背景吞掉 */
-  text-shadow: 0 0 12px rgba(56, 189, 248, 0.5);
+.space-header h1 {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--space-text-primary);
+  margin: 0 0 8px 0;
 }
 
-.space-root .space-hero .hero-subtitle {
-  color: var(--space-muted);
-  margin-top: 6px;
+.space-header .subtitle {
+  font-size: 16px;
+  color: var(--space-text-secondary);
 }
 
-.space-root .space-card {
-  background: var(--space-panel);
-  border: 1px solid var(--space-border);
-  border-radius: 16px;
-  padding: 14px 16px;
-  box-shadow: var(--space-card-glow);
-  backdrop-filter: blur(6px);
-  position: relative;
-  overflow: visible;
+/* 2. Flat Cards */
+.space-card,
+.space-controls-card,
+.space-info-card,
+.space-section-card {
+  background: var(--space-card-bg);
+  border: 1px solid var(--space-border-color);
+  border-radius: 6px;
+  /* Tighter radius */
+  box-shadow: none;
+  /* No shadow matches "Flat" aesthetics better, or very subtle */
 }
 
-.space-root .space-controls {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  align-items: center;
-  position: relative;
-  z-index: 3;
-}
-
-.space-root .space-controls.space-controls--tight {
-  gap: 10px 14px;
-}
-
-.space-root .space-controls .quick-stat {
+/* Controls */
+.space-controls-card {
+  padding: 24px;
+  margin-bottom: 16px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.space-root .space-controls .quick-stat .stat-label {
-  color: var(--space-muted);
-  font-size: 13px;
-}
-
-.space-root .space-controls .quick-stat .stat-value {
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.space-root .score-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-  margin-top: 12px;
-}
-
-.space-root .score-card {
-  background: linear-gradient(145deg, rgba(22, 34, 53, 0.9), rgba(16, 26, 44, 0.9));
-  border: 1px solid var(--space-border);
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: var(--space-card-glow);
-  position: relative;
-  overflow: hidden;
-  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
-}
-
-.space-root .score-card:hover {
-  transform: translateY(-4px);
-  border-color: rgba(96, 165, 250, 0.5);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25), 0 10px 40px rgba(96, 165, 250, 0.12);
-}
-
-.space-root .score-card .card-head {
-  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
 }
 
-.space-root .score-card .card-head .dataset {
-  font-weight: 700;
-  font-size: 16px;
-  letter-spacing: 0.2px;
-}
-
-.space-root .score-card .badge {
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--space-border);
-  color: var(--space-text);
-  font-size: 12px;
-  letter-spacing: 0.4px;
-}
-
-.space-root .score-card .primary-metric {
-  font-size: 32px;
-  font-weight: 700;
-  margin: 4px 0 6px;
-  background: var(--space-accent);
-  -webkit-background-clip: text;
-  color: transparent;
-}
-
-.space-root .score-card .metric-key {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.9px;
-  color: var(--space-muted);
-}
-
-.space-root .score-card .metric-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px 12px;
-  margin-top: 10px;
-}
-
-.space-root .score-card .metric-list .metric-line {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--space-text);
-  opacity: 0.9;
-}
-
-.space-root .score-card .meta {
-  margin-top: 12px;
-  font-size: 12px;
-  color: var(--space-muted);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.space-root .score-card .meta .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--space-accent-solid);
-  display: inline-block;
-  margin-right: 6px;
-}
-
-.space-root .empty-state {
+/* Summary */
+.space-info-card {
   padding: 24px;
-  text-align: center;
-  color: var(--space-muted);
-  border: 1px dashed var(--space-border);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
+  /* Standard padding */
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--space-text-secondary);
+  width: 100%;
 }
 
-.space-root .space-summary-card {
-  margin-top: 12px;
-  font-size: 13px;
-  line-height: 1.7;
-  position: relative;
-  z-index: 1;
-}
-
-.space-root .space-refresh-btn button {
-  padding: 6px 10px;
-  font-size: 13px;
-  min-width: 110px;
-}
-
-.space-root .space-export-btn button {
-  padding: 6px 10px;
-  font-size: 13px;
-  min-width: 120px;
-}
-
-.space-root .space-summary-card ul {
-  list-style: none;
-  margin: 0;
-  padding-left: 0;
-}
-
-.space-root .space-summary-card li {
-  position: relative;
-  padding-left: 16px;
-  margin: 2px 0;
-}
-
-.space-root .space-summary-card li::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 0.78em;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--space-accent-solid);
-}
-
-.space-root .space-summary-card code {
-  background: rgba(15, 23, 42, 0.8);
-  padding: 2px 5px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.space-root .space-table-card {
-  margin-top: 12px;
-  padding: 10px 0 8px;
-  position: relative;
-  z-index: 1;
-}
-
-.space-root .space-table-title {
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--space-muted);
-  margin: 0 14px 8px;
-}
-
-.space-root .space-table-grid {
-  margin: 0 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  overflow-x: auto;
-  overflow-y: hidden;
-  background: rgba(15, 23, 42, 0.78);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
-
-.space-root .space-table-grid table {
-  border-collapse: separate;
-  border-spacing: 0;
-  width: max-content;
-  min-width: 100%;
-}
-
-.space-root .space-table-grid col.col-model {
-  width: var(--model-col-width);
-}
-
-.space-root .space-table-grid col.col-metric {
-  width: var(--metric-col-width);
-}
-
-.space-root .space-table-grid th,
-.space-root .space-table-grid td {
-  padding: 6px 10px;
-  white-space: nowrap;
-  font-size: 13px;
-  color: var(--space-text);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.4);
-  border-right: 1px solid rgba(148, 163, 184, 0.25);
-}
-
-.space-root .space-table-grid th:last-child,
-.space-root .space-table-grid td:last-child {
-  border-right: none;
-}
-
-.space-root .space-table-grid thead tr {
-  background: linear-gradient(90deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.85));
-}
-
-.space-root .space-table-grid thead th {
-  font-size: 12px;
-  color: var(--space-muted);
-  text-align: center;
-  border-bottom: 1px solid rgba(59, 130, 246, 0.65);
-  letter-spacing: 0.02em;
-}
-
-.space-root .space-table-grid tbody tr:nth-child(odd) {
-  background: rgba(15, 23, 42, 0.85);
-}
-
-.space-root .space-table-grid tbody tr:nth-child(even) {
-  background: rgba(15, 23, 42, 0.72);
-}
-
-.space-root .space-table-grid tbody tr:hover {
-  background: rgba(30, 64, 175, 0.9);
-}
-
-.space-root .space-table-grid td.cell-model {
+.space-info-card strong {
+  color: var(--space-text-primary);
   font-weight: 600;
-  color: #e5f3ff;
 }
 
-.space-root .space-table-grid td:not(.cell-model) {
-  text-align: center;
+/* 4. Tabs */
+.tabs {
+  background: transparent !important;
+  border: none !important;
+  margin-top: 24px;
 }
 
-.space-root .space-table-empty {
-  padding: 16px 10px;
+.tab-nav {
+  border-bottom: 1px solid var(--space-border-color);
+  margin-bottom: 24px;
+  justify-content: flex-start;
+  /* Left align tabs for dashboard feel? Or Center. Let's stick to Left for "functional" feel */
+  justify-content: center;
+  gap: 2px;
+}
+
+.tab-nav button {
+  font-family: var(--space-font-sans);
+  font-weight: 500;
+  font-size: 14px;
+  padding: 8px 16px;
+  color: var(--space-text-secondary);
+  border: 1px solid transparent !important;
+  background: transparent;
+  border-radius: 6px;
+}
+
+.tab-nav button:hover {
+  background: rgba(110, 118, 129, 0.1);
+  color: var(--space-text-primary);
+}
+
+.tab-nav button.selected {
+  background: rgba(110, 118, 129, 0.2);
+  /* Subtle highlight */
+  color: var(--space-text-primary) !important;
+  font-weight: 600;
+}
+
+/* 5. Chart Containers - AGGRESSIVE FILL */
+.space-section-card {
+  padding: 24px;
+  margin-bottom: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.space-chart-container {
+  width: 100% !important;
+  /* height: auto;  Let Plotly control height via Python config */
+  display: block;
+  /* Default block behavior */
+}
+
+/* Force full width for Plotly, but respect aspect ratio/height */
+.js-plotly-plot,
+.plot-container,
+.user-select-none.svg-container {
+  width: 100% !important;
+  /* Remove height: 100% to prevent forced stretching/whitespace */
+  margin: 0 auto !important;
+}
+
+/* Ensure the SVG inside scales width but keeps ratio */
+.main-svg {
+  width: 100% !important;
+  height: auto !important;
+}
+
+/* Chart Title */
+.chart-title {
   text-align: center;
+  color: var(--space-text-primary);
+  margin-bottom: 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* 6. Data Tables - Full Width & Clean */
+.space-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--space-border-color);
+  border-radius: 6px;
+  margin-top: 16px;
+  background: var(--space-bg-color);
+  /* Contrast against card */
+}
+
+.space-table-wrapper table {
+  width: 100%;
+  /* FORCE FULL WIDTH */
+  border-collapse: collapse;
   font-size: 13px;
-  color: var(--space-muted);
+  table-layout: fixed;
+  /* Keep fixed layout for alignment */
+}
+
+.space-table-wrapper th,
+.space-table-wrapper td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--space-border-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  /* Numbers align right usually, but keeping center for consistency with previous */
+  text-align: center;
+}
+
+.space-table-wrapper th {
+  background: var(--space-header-bg);
+  color: var(--space-text-primary);
+  font-weight: 600;
+  text-align: center;
+}
+
+.space-table-wrapper td {
+  color: var(--space-text-secondary);
+  font-family: var(--space-font-mono);
+}
+
+/* Sticky First Column */
+.space-table-wrapper td:first-child,
+.space-table-wrapper th:first-child {
+  text-align: left;
+  font-family: var(--space-font-sans);
+  width: 250px;
+  color: var(--space-accent);
+  position: sticky;
+  left: 0;
+  background: var(--space-bg-color);
+  /* Match table bg */
+  z-index: 10;
+  border-right: 1px solid var(--space-border-color);
+}
+
+.space-table-wrapper th:first-child {
+  background: var(--space-header-bg);
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--space-bg-color);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #484f58;
+  border-radius: 5px;
+  border: 2px solid var(--space-bg-color);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6e7681;
+}
+
+/* Prose */
+.prose {
+  color: var(--space-text-primary) !important;
 }

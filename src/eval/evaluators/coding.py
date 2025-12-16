@@ -22,7 +22,7 @@ DEFAULT_CODE_SAMPLING = SamplingConfig(
     alpha_presence=0.25,
     alpha_frequency=0.25,
     alpha_decay=0.996,
-    stop_tokens=(0, 261, 24281),
+    stop_tokens=(0, 261, 6884, 21214, 24281),
     pad_zero=True,
 )
 
@@ -42,6 +42,16 @@ def _format_prompt(prompt: str) -> str:
     return (
         "User:You are a top-level code master. Complete the following code without any additional text or explanation:\n"
         f"{clean}\n\nAssistant:{clean}"
+    )
+
+
+def _format_prompt_no_echo(prompt: str) -> str:
+    """Variant without echoing prompt after Assistant (used for bug-fix style prompts)."""
+
+    clean = _compress_newlines(prompt).strip()
+    return (
+        "User: You are a top-level code master. Complete the following code without any additional text or explanation:\n"
+        f"{clean}\n\nAssistant: <think></think>\n```python"
     )
 
 
@@ -80,10 +90,15 @@ class CodingPipeline:
         if not records:
             return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
+        is_human_eval_fix = "human_eval_fix" in dataset_path.lower()
+
         entries: list[tuple[str, CodeGenerationRecord, int, int]] = []
         for rec_idx, record in enumerate(records):
             for sample_idx in range(samples_per_task):
-                entries.append((_format_prompt(record.prompt), record, rec_idx, sample_idx))
+                prompt_text = (
+                    _format_prompt_no_echo(record.prompt) if is_human_eval_fix else _format_prompt(record.prompt)
+                )
+                entries.append((prompt_text, record, rec_idx, sample_idx))
 
         target_path = Path(output_path)
         resume = detect_resume_state(target_path)
@@ -140,18 +155,13 @@ class CodingPipeline:
                 )
             writer.close()
 
-        eval_results = None
-        eval_details_path = None
-        try:
-            eval_results, eval_details_path = evaluate_functional_correctness(
-                sample_file=str(output_path),
-                k=tuple(pass_k),
-                n_workers=eval_workers,
-                timeout=eval_timeout,
-                problem_file=dataset_path,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"⚠️ HumanEval 评测失败：{exc}")
+        eval_results, eval_details_path = evaluate_functional_correctness(
+            sample_file=str(output_path),
+            k=tuple(pass_k),
+            n_workers=eval_workers,
+            timeout=eval_timeout,
+            problem_file=dataset_path,
+        )
 
         return CodingPipelineResult(
             dataset=dataset_name,
@@ -182,10 +192,15 @@ class CodingPipeline:
         if not records:
             return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
+        is_human_eval_fix = "human_eval_fix" in dataset_path.lower()
+
         entries: list[tuple[str, CodeGenerationRecord, int, int]] = []
         for rec_idx, record in enumerate(records):
             for sample_idx in range(samples_per_task):
-                entries.append((_format_prompt(record.prompt), record, rec_idx, sample_idx))
+                prompt_text = (
+                    _format_prompt_no_echo(record.prompt) if is_human_eval_fix else _format_prompt(record.prompt)
+                )
+                entries.append((prompt_text, record, rec_idx, sample_idx))
 
         target_path = Path(output_path)
         resume = detect_resume_state(target_path)
@@ -243,20 +258,15 @@ class CodingPipeline:
                 )
             writer.close()
 
-        eval_results = None
-        eval_details_path = None
-        try:
-            from src.eval.metrics.code_generation.mbpp import evaluate_mbpp
+        from src.eval.metrics.code_generation.mbpp import evaluate_mbpp
 
-            eval_results, eval_details_path = evaluate_mbpp(
-                sample_file=str(output_path),
-                k=tuple(pass_k),
-                n_workers=eval_workers,
-                timeout=eval_timeout,
-                problem_file=dataset_path,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"⚠️ MBPP 评测失败：{exc}")
+        eval_results, eval_details_path = evaluate_mbpp(
+            sample_file=str(output_path),
+            k=tuple(pass_k),
+            n_workers=eval_workers,
+            timeout=eval_timeout,
+            problem_file=dataset_path,
+        )
 
         return CodingPipelineResult(
             dataset=dataset_name,
