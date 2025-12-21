@@ -1,52 +1,54 @@
 # RWKV Skills
 
-面向 RWKV7 的推理与评测脚手架，包含批量推理引擎、常见评测数据集的准备器以及一个 GPU 调度器骨架。
+English | [中文](README.zh-CN.md)
 
-## 目录速览
-- `src/infer`：RWKV 模型加载、采样策略与连续批量生成引擎。
-- `src/infer/rwkv7`：上游 RWKV7 参考实现（含 CUDA 扩展、词表）已内置，无需额外子模块。
-- `src/eval/datasets`：数据结构定义、JSONL 加载器以及各类数据集的准备脚本。
-- `src/eval/evaluators`：多选 / 自由问答 / 指令遵循 / 代码生成（HumanEval、MBPP）评测管线。
-- `src/eval/scheduler`：评测任务排队、GPU 侦测与调度的 CLI（现已附带 multi-choice / free-response / instruction-following / human-eval / mbpp 入口脚本）。
-- `weights`、`data`、`results`（可选）：模型权重、数据集与评测产物的默认存放位置。
+An inference & evaluation scaffold for RWKV7, including a continuous-batching inference engine, dataset preppers for common benchmarks, and a GPU scheduler skeleton.
 
-## 环境要求
-- Python 3.12+，推荐安装 `uv` 以管理依赖。
-- NVIDIA GPU（使用 `flashinfer`、`triton` 等依赖），需要与所选 PyTorch 发行版匹配的 CUDA/ROCm。
+## Quick tour
+- `src/infer`: RWKV model loading, sampling strategies, and a continuous-batching generation engine.
+- `src/infer/rwkv7`: The upstream RWKV7 reference implementation (CUDA extension, vocab) is vendored in; no extra submodule is required.
+- `src/eval/datasets`: Data structures, JSONL loaders, and dataset preparation scripts.
+- `src/eval/evaluators`: Evaluation pipelines for multiple-choice / free-response / instruction-following / code generation (HumanEval, MBPP).
+- `src/eval/scheduler`: A CLI for queueing evaluation jobs, GPU detection, and dispatching (with entry scripts for multi-choice / free-response / instruction-following / human-eval / mbpp).
+- `weights`, `data`, `results` (optional): Default locations for model weights, datasets, and evaluation artifacts.
 
-## 安装
+## Requirements
+- Python 3.12+. `uv` is recommended for dependency management.
+- NVIDIA GPU (via dependencies like `flashinfer`, `triton`), with CUDA/ROCm matching your chosen PyTorch build.
+
+## Installation
 ```bash
-# 安装依赖（示例：CUDA 12.9，对应 pyproject 中 torch-cu129 可选项）
+# Install dependencies (example: CUDA 12.9, matching the torch-cu129 extra in pyproject)
 uv sync --extra torch-cu129
 
-# 开发模式安装，暴露 CLI 入口
+# Editable install to expose CLI entry points
 uv pip install -e .
 ```
-如需其他 CUDA/CPU 发行版，请改用 `--extra torch-cu126` / `--extra torch-cpu` 等。
+For other CUDA/CPU builds, use `--extra torch-cu126` / `--extra torch-cpu`, etc.
 
-## 下载模型权重
-`rwkv-download-weights` 会从 Hugging Face 镜像枚举并并发下载 `.pth` 权重：
+## Download model weights
+`rwkv-download-weights` enumerates and downloads `.pth` weights concurrently from a Hugging Face mirror:
 ```bash
 rwkv-download-weights /path/to/weights
-# 或指定额外仓库：
+# or add extra repos:
 rwkv-download-weights --repo BlinkDL/rwkv7-g1 --repo your/repo
 ```
-可通过环境变量覆盖默认镜像与 Token（`HF_ENDPOINT`、`HF_TOKEN`）。
+You can override the default endpoint/token via environment variables (`HF_ENDPOINT`, `HF_TOKEN`).
 
-## 数据集准备
-数据集默认存放在 `data/`。可以直接调用准备器生成 JSONL：
+## Dataset preparation
+Datasets are stored under `data/` by default. You can call the prepper to generate JSONL files:
 ```bash
 python - <<'PY'
 from pathlib import Path
 from src.eval.datasets.data_prepper.data_manager import prepare_dataset
 
-prepare_dataset("mmlu", Path("data"))  # 会生成 data/mmlu/<split>.jsonl
+prepare_dataset("mmlu", Path("data"))  # writes data/mmlu/<split>.jsonl
 PY
 ```
-支持的数据集别名可通过 `available_*_datasets()` 系列函数查看。
+To see supported dataset aliases, check the `available_*_datasets()` family of functions.
 
-## 评测与推理示例
-目前推荐直接调用管线类：
+## Evaluation & inference example
+At the moment, the recommended entry point is to call pipeline classes directly:
 ```python
 from src.eval.evaluators.multi_choice import MultipleChoicePipeline
 from src.infer.model import ModelLoadConfig
@@ -58,24 +60,28 @@ result = pipeline.run_direct(
 )
 print(result)
 ```
-自由问答与指令遵循的用法类似，分别使用 `FreeResponsePipeline` 与 `InstructionFollowingPipeline`。
+Free-response and instruction-following work similarly via `FreeResponsePipeline` and `InstructionFollowingPipeline`.
 
-## 调度器 CLI
-`rwkv-skills-scheduler` 暴露了一组命令（队列预览、调度、状态、停止、日志轮播）：
+## Scheduler CLI
+`rwkv-skills-scheduler` provides commands for queue preview, dispatch, status, stop, and log rotation:
 ```bash
 rwkv-skills-scheduler queue
 rwkv-skills-scheduler dispatch --completion-dir results/completions --run-log-dir results/logs --eval-result-dir results/eval
 ```
-若需无视 `results/scores` 中已存在的结果并强制重跑，可在 dispatch 时附上 `--overwrite`，调度器会在启动前删除旧的 completion / score / eval 产物再重新评测。
-可以用 `--only-datasets aime24 aime25` 这类参数仅重测指定 benchmark（名称即可，不需要 `_test` 后缀），也可以用 `--skip-datasets mmlu` 排除特定集合。若想只跑部分模型，无需填写完整路径，可使用 `--model-regex '^rwkv7-.*7\\.2b$'` 等正则过滤模型文件名，配合默认的权重 glob 即可。
-默认模型 glob 在 `src/eval/scheduler/config.py` 中配置（仅指向仓库内 `weights/rwkv7-*.pth`，请按需覆盖）。调度器依赖的入口脚本已提供：
-`src/bin/eval_multi_choice.py`、`eval_multi_choice_cot.py`、`eval_free_response.py`、`eval_free_response_judge.py`、`eval_instruction_following.py`、`eval_code_human_eval.py`、`eval_code_mbpp.py`。
-其中 `math_500_test` / `answer_judge_test` / `gaokao2023en_test` 这类需要 LLM 评分的数学问答会自动被派发到 `eval_free_response_judge.py`，其余 free-response 仍走 `eval_free_response.py` 的 exact match 逻辑。
-`aime24_test` / `aime25_test` / `beyond_aime_test` / `hmmt_feb25_test` / `brumo25_test` 这类高难度数学集合会在 `eval_free_response.py` 中默认触发 Optuna 采样参数搜索（30 trials，可用 `--param-search-trials` 覆盖），并把最佳 trial 的采样参数写入 score JSON 的 `task_details.param_search`。若想跳过搜索可加 `--no-param-search`，也可用 `--param-search` 在其他数据集上强制开启。
+To ignore existing results under `results/scores` and force a rerun, pass `--overwrite` on dispatch; the scheduler will delete old completion / score / eval artifacts before re-evaluating.
 
-## HumanEval 代码生成评测
-- 数据集准备：`prepare_dataset("human_eval", Path("data"))` 会下载官方 `HumanEval.jsonl.gz` 并写出 `data/human_eval/test.jsonl`。
-- 直接运行 CLI：
+You can re-run only specific benchmarks with `--only-datasets aime24 aime25` (names only; no `_test` suffix), or exclude sets with `--skip-datasets mmlu`. To run only a subset of models, you can filter filenames via `--model-regex '^rwkv7-.*7\\.2b$'` while keeping the default weight glob.
+
+The default model glob is configured in `src/eval/scheduler/config.py` (it only points to `weights/rwkv7-*.pth` within the repo; override as needed). Scheduler entry scripts are provided:
+`src/bin/eval_multi_choice.py`, `eval_multi_choice_cot.py`, `eval_free_response.py`, `eval_free_response_judge.py`, `eval_instruction_following.py`, `eval_code_human_eval.py`, `eval_code_mbpp.py`.
+
+Math QA sets that require LLM judging (e.g. `math_500_test` / `answer_judge_test` / `gaokao2023en_test`) are automatically dispatched to `eval_free_response_judge.py`; other free-response tasks still use `eval_free_response.py`'s exact-match logic.
+
+High-difficulty math sets (e.g. `aime24_test` / `aime25_test` / `beyond_aime_test` / `hmmt_feb25_test` / `brumo25_test`) trigger Optuna sampling-parameter search by default in `eval_free_response.py` (30 trials; override with `--param-search-trials`). The best trial's sampling params are written to `task_details.param_search` in the score JSON. To skip the search, use `--no-param-search`, or force-enable it on other datasets with `--param-search`.
+
+## HumanEval code generation evaluation
+- Dataset prep: `prepare_dataset("human_eval", Path("data"))` downloads the official `HumanEval.jsonl.gz` and writes `data/human_eval/test.jsonl`.
+- Run via CLI:
   ```bash
   python -m src.bin.eval_code_human_eval \
     --model-path weights/rwkv7-*.pth \
@@ -84,11 +90,11 @@ rwkv-skills-scheduler dispatch --completion-dir results/completions --run-log-di
     --pass-k 1 --pass-k 2 --pass-k 4 --pass-k 8 --pass-k 16 \
     --eval-timeout 3
   ```
-  生成的样本写入 results/completions 结构，并会自动执行官方测试用例输出 pass@k 结果（生成次数等于最大的 k）。
+  Samples are written under `results/completions`, and the official unit tests are executed automatically to produce pass@k (number of generations equals the maximum k).
 
-## MBPP 代码生成评测
-- 数据集准备：`prepare_dataset("mbpp", Path("data"))` 会使用 EvalPlus 版本的 MBPP+，并将 prompt 中的 4 空格转换为制表符。
-- 运行 CLI：
+## MBPP code generation evaluation
+- Dataset prep: `prepare_dataset("mbpp", Path("data"))` uses the EvalPlus variant MBPP+ and converts 4-space indentation in prompts into tabs.
+- Run via CLI:
   ```bash
   python -m src.bin.eval_code_mbpp \
     --model-path weights/rwkv7-*.pth \
@@ -97,19 +103,19 @@ rwkv-skills-scheduler dispatch --completion-dir results/completions --run-log-di
     --pass-k 1 --pass-k 2 --pass-k 4 --pass-k 8 --pass-k 16 \
     --eval-timeout 3
   ```
-  会生成多样本并用 EvalPlus 测试用例执行，输出 pass@k（生成次数等于最大的 k）。
+  Multiple samples are generated and executed against EvalPlus test cases to output pass@k (number of generations equals the maximum k).
 
-## 已知缺口 / TODO
-- 尚未支持其他代码基准（LiveCodeBench/BigCodeBench 等）；当前代码生成仅覆盖 HumanEval 与 MBPP。
+## Known gaps / TODO
+- Other code benchmarks (LiveCodeBench/BigCodeBench, etc.) are not supported yet; code generation currently covers only HumanEval and MBPP.
 
-欢迎根据上述缺口补全实现并更新文档。
+Contributions are welcome—please implement missing pieces and update the docs accordingly.
 
-## 历史结果迁移
-若已将旧版本 `rwkv-mmlu` / `rwkv-skills` 生成的 JSON 汇总到 `results_old/`，可以通过下述命令一次性迁移到当前 `results/scores/` 布局，避免重复跑全量评测：
+## Migrating historical results
+If you have JSON summaries from older versions (`rwkv-mmlu` / `rwkv-skills`) under `results_old/`, you can migrate them into the current `results/scores/` layout to avoid rerunning everything:
 
 ```bash
 python -m src.bin.migrate_old_results --source results_old
-# 只想看看会写哪些文件，可加 --dry-run；已有结果但需要覆盖可加 --overwrite
+# use --dry-run to preview outputs; use --overwrite to replace existing results
 ```
 
-迁移脚本会自动识别多选 / 数学自由问答 / instruction-following 等任务类型，保留科目细分指标，并在默认情况下跳过仓库里已有的 score JSON。
+The migration script automatically recognizes task types (multiple-choice / math free-response / instruction-following, etc.), preserves subject-level metrics, and skips score JSONs that already exist in the repo by default.
