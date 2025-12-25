@@ -112,8 +112,9 @@ class FreeResponsePipeline:
         pass_k: Iterable[int] | None = None,
         write_output: bool = True,
         samples_per_task: int | None = None,
+        probe_only: bool = False,
     ) -> FreeResponsePipelineResult:
-        samples_per_task = samples_per_task or max(1, max(pass_k) if pass_k else 1)
+        samples_per_task = (samples_per_task or max(1, max(pass_k) if pass_k else 1)) if not probe_only else 1
         raw_records, resolved_name = self._load_records(dataset_path, sample_limit)
         problem_count = len(raw_records)
         dataset_name = dataset_name or resolved_name
@@ -130,7 +131,7 @@ class FreeResponsePipeline:
         if not expanded:
             return FreeResponsePipelineResult(dataset_name, 0, target_path, problem_count)
 
-        if write_output:
+        if write_output and not probe_only:
             resume = detect_resume_state(target_path)
             if resume.has_progress:
                 ensure_resume_samples_compatible(target_path, samples_per_task)
@@ -145,8 +146,19 @@ class FreeResponsePipeline:
         if not remaining_entries:
             return FreeResponsePipelineResult(dataset_name, len(expanded), target_path, problem_count)
 
-        writer = JsonlStageWriter(target_path, resume=resume.has_progress) if write_output else None
+        writer = JsonlStageWriter(target_path, resume=resume.has_progress) if write_output and not probe_only else None
         cot_prompts = [cot_prompt_template.replace("<Q>", record.question) for _, record, _ in remaining_entries]
+
+        if probe_only:
+            _ = self.engine.generate(
+                cot_prompts,
+                sampling=final_sampling,
+                batch_size=batch_size,
+                progress_desc="Generating answers",
+                probe_only=probe_only,
+            )
+            return FreeResponsePipelineResult(dataset_name, len(expanded), target_path, problem_count)
+
         cot_outputs = self.engine.generate(
             cot_prompts,
             sampling=cot_sampling,

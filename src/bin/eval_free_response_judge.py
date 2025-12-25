@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import tempfile
 from pathlib import Path
 from typing import Sequence
-import uuid
 
 from src.eval.metrics.free_response import (
     LLMJudge,
@@ -30,9 +28,6 @@ from src.eval.evaluators.free_response import (
 from src.infer.model import ModelLoadConfig
 
 
-PROBE_MIN_SAMPLES = 1
-PROBE_COT_MAX_TOKENS = 256
-PROBE_FINAL_MAX_TOKENS = 64
 # Free-response 默认只算 pass@1；高难数学集单独放宽
 DEFAULT_PASS_K = (1,)
 DEFAULT_AVG_K: tuple[int, ...] = ()
@@ -73,12 +68,6 @@ def _load_env_file(path: Path) -> None:
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         os.environ.setdefault(key, value)
-
-
-def _make_probe_output_path(suffix: str = ".jsonl") -> Path:
-    temp_root = Path(tempfile.gettempdir())
-    return temp_root / f"rwkv_probe_{uuid.uuid4().hex}{suffix}"
-
 
 def _resolve_output_path(dataset: str, model_path: str, user_path: str | None) -> Path:
     if user_path:
@@ -204,15 +193,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     final_sampling = DEFAULT_FINAL_SAMPLING.clamp(args.final_max_tokens)
     sample_limit: int | None = args.max_samples
     output_path = out_path
-    probe_output_path: Path | None = None
     generate_pass_k = (1,) if args.probe_only else pass_k_final
     samples_per_task = max(_max_k(pass_k_final), _max_k(avg_k_final), 1)
     if args.probe_only:
-        sample_limit = max(args.batch_size, PROBE_MIN_SAMPLES)
-        cot_sampling = cot_sampling.clamp(PROBE_COT_MAX_TOKENS)
-        final_sampling = final_sampling.clamp(PROBE_FINAL_MAX_TOKENS)
-        probe_output_path = _make_probe_output_path(out_path.suffix or ".jsonl")
-        output_path = probe_output_path
+        batch_size = max(1, args.batch_size)
+        _ = pipeline.run(
+            dataset_path=str(dataset_path),
+            output_path=str(output_path),
+            cot_sampling=cot_sampling,
+            final_sampling=final_sampling,
+            batch_size=batch_size,
+            sample_limit=batch_size,
+            pad_to_batch=True,
+            pass_k=(1,),
+            samples_per_task=1,
+            probe_only=True,
+            write_output=False,
+        )
+        print(f"🧪 probe-only run completed: {batch_size} sample(s) evaluated with batch {args.batch_size}.")
+        return 0
 
     result = pipeline.run(
         dataset_path=str(dataset_path),
@@ -225,15 +224,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         samples_per_task=samples_per_task if not args.probe_only else 1,
         write_output=not args.probe_only,
     )
-
-    if args.probe_only:
-        print(
-            "🧪 probe-only run completed: "
-            f"{result.sample_count} sample(s) evaluated with batch {args.batch_size}."
-        )
-        if probe_output_path:
-            probe_output_path.unlink(missing_ok=True)
-        return 0
 
     samples = load_samples(output_path)
     judge_model = (

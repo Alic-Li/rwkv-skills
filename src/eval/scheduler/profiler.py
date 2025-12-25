@@ -25,7 +25,9 @@ _BATCH_CANDIDATES_ENV = os.environ.get("RUN_BATCH_CANDIDATES") or os.environ.get
 DEFAULT_COT_BATCH_CANDIDATES = tuple(
     int(value.strip()) for value in _BATCH_CANDIDATES_ENV.split(",") if value.strip()
 )
-DEFAULT_PROBE_MAX_GENERATE = int(os.environ.get("RUN_PROBE_MAX_GENERATE", "16"))
+# Used only for jobs that expose `probe_max_generate_flag` (currently code evaluators).
+# Default to the evaluator's max length (1024) for accurate batch-size probing.
+DEFAULT_PROBE_MAX_GENERATE = int(os.environ.get("RUN_PROBE_MAX_GENERATE", "1024"))
 
 
 def _extract_cached_batch(record: Any) -> int | None:
@@ -48,7 +50,7 @@ def load_batch_cache(cache_path: Path) -> dict[str, dict[str, dict[str, dict[str
         return {}
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
-    except Exception:
+    except:
         return {}
     if not isinstance(data, Mapping):
         return {}
@@ -328,6 +330,7 @@ class BatchProfiler:
                 for line in stderr.splitlines():
                     print(f"     {line}")
             raise RuntimeError(f"probe failed for {job_id} on cuda:{gpu}: {message}")
+        return None
 
     def invalidate_cache(self, job_name: str, model_slug: str, gpu: str, reason: str | None = None) -> None:
         """Mark a cached batch as invalid so the next run will re-probe."""

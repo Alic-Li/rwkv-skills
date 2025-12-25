@@ -84,13 +84,31 @@ class CodingPipeline:
         probe_only: bool = False,
         write_output: bool = True,
     ) -> CodingPipelineResult:
-        samples_per_task = max(1, max(pass_k) if pass_k else 1)
+        batch_size = max(1, int(batch_size))
+        if probe_only and (sample_limit is None or sample_limit <= 0 or sample_limit > batch_size):
+            sample_limit = batch_size
+        samples_per_task = 1 if probe_only else max(1, max(pass_k) if pass_k else 1)
         write_output = write_output and (not probe_only)
         records, dataset_name = self._load_records(dataset_path, sample_limit)
         if not records:
             return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
         is_human_eval_fix = "human_eval_fix" in dataset_path.lower()
+
+        if probe_only:
+            prompts = []
+            for idx in range(batch_size):
+                record = records[idx % len(records)]
+                prompt_text = _format_prompt_no_echo(record.prompt) if is_human_eval_fix else _format_prompt(record.prompt)
+                prompts.append(prompt_text)
+            _ = self.engine.generate(
+                prompts,
+                sampling=sampling,
+                batch_size=batch_size,
+                progress_desc="Probing code",
+                probe_only=True,
+            )
+            return CodingPipelineResult(dataset_name, len(prompts), Path(output_path), len(records))
 
         entries: list[tuple[str, CodeGenerationRecord, int, int]] = []
         for rec_idx, record in enumerate(records):
@@ -109,8 +127,6 @@ class CodingPipeline:
             remaining = max(len(entries) - start_index, 0)
             print(f"⏩ HumanEval 恢复运行：已完成 {start_index}/{len(entries)}，剩余 {remaining}")
         pending_entries = entries[start_index:]
-        if probe_only and pending_entries:
-            pending_entries = pending_entries[: min(batch_size, len(pending_entries))]
         if pending_entries:
             prompts = [entry[0] for entry in pending_entries]
             outputs = self.engine.generate(
@@ -186,13 +202,31 @@ class CodingPipeline:
         probe_only: bool = False,
         write_output: bool = True,
     ) -> CodingPipelineResult:
-        samples_per_task = max(1, max(pass_k) if pass_k else 1)
+        batch_size = max(1, int(batch_size))
+        if probe_only and (sample_limit is None or sample_limit <= 0 or sample_limit > batch_size):
+            sample_limit = batch_size
+        samples_per_task = 1 if probe_only else max(1, max(pass_k) if pass_k else 1)
         write_output = write_output and (not probe_only)
         records, dataset_name = self._load_records(dataset_path, sample_limit)
         if not records:
             return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
         is_human_eval_fix = "human_eval_fix" in dataset_path.lower()
+
+        if probe_only:
+            prompts = []
+            for idx in range(batch_size):
+                record = records[idx % len(records)]
+                prompt_text = _format_prompt_no_echo(record.prompt) if is_human_eval_fix else _format_prompt(record.prompt)
+                prompts.append(prompt_text)
+            _ = self.engine.generate(
+                prompts,
+                sampling=sampling,
+                batch_size=batch_size,
+                progress_desc="Probing code",
+                probe_only=True,
+            )
+            return CodingPipelineResult(dataset_name, len(prompts), Path(output_path), len(records))
 
         entries: list[tuple[str, CodeGenerationRecord, int, int]] = []
         for rec_idx, record in enumerate(records):
@@ -211,8 +245,6 @@ class CodingPipeline:
             remaining = max(len(entries) - start_index, 0)
             print(f"⏩ MBPP 恢复运行：已完成 {start_index}/{len(entries)}，剩余 {remaining}")
         pending_entries = entries[start_index:]
-        if probe_only and pending_entries:
-            pending_entries = pending_entries[: min(batch_size, len(pending_entries))]
         if pending_entries:
             prompts = [entry[0] for entry in pending_entries]
             outputs = self.engine.generate(

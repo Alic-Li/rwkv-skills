@@ -5,12 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import tempfile
 from dataclasses import asdict, replace
 from pathlib import Path
 import shutil
 from typing import Sequence
-import uuid
 
 import optuna
 
@@ -41,9 +39,6 @@ from src.infer.model import ModelLoadConfig
 from src.infer.sampling import SamplingConfig
 
 
-PROBE_MIN_SAMPLES = 1
-PROBE_COT_MAX_TOKENS = 256
-PROBE_FINAL_MAX_TOKENS = 64
 DEFAULT_PARAM_SEARCH_TRIALS = 30
 # Free-response 默认只算 pass@1；高难数学集单独放宽
 DEFAULT_PASS_K = (1,)
@@ -94,11 +89,6 @@ PARAM_SEARCH_DATASETS: set[str] = set()
 
 def _round_float(value: float, digits: int = 2) -> float:
     return round(float(value), digits)
-
-
-def _make_probe_output_path(suffix: str = ".jsonl") -> Path:
-    temp_root = Path(tempfile.gettempdir())
-    return temp_root / f"rwkv_probe_{uuid.uuid4().hex}{suffix}"
 
 
 def _resolve_output_path(dataset: str, model_path: str, user_path: str | None) -> Path:
@@ -292,7 +282,8 @@ def _run_single_eval(
     pad_to_batch: bool,
     pass_k: tuple[int, ...],
     samples_per_task: int,
-) -> tuple[FreeResponsePipelineResult, FreeResponseMetrics]:
+    probe_only: bool = False,
+) -> tuple[FreeResponsePipelineResult, FreeResponseMetrics | None]:
     result = pipeline.run(
         dataset_path=dataset_path,
         output_path=str(output_path),
@@ -303,7 +294,10 @@ def _run_single_eval(
         pad_to_batch=pad_to_batch,
         pass_k=pass_k,
         samples_per_task=samples_per_task,
+        probe_only=probe_only,
     )
+    if probe_only:
+        return result, None
     samples = load_samples(output_path)
     metrics = evaluate_exact(samples)
     return result, metrics
@@ -431,42 +425,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     base_cot_sampling = MATH_DEFAULT_COT_SAMPLING if lower_slug in HARD_MATH_PASS_K_SLUGS else DEFAULT_COT_SAMPLING
     cot_sampling = base_cot_sampling.clamp(args.cot_max_tokens)
     final_sampling = DEFAULT_FINAL_SAMPLING.clamp(args.final_max_tokens)
-    sample_limit: int | None = args.max_samples
     batch_size = max(1, args.batch_size)
+    sample_limit: int | None = args.max_samples if not args.probe_only else batch_size
     samples_per_task_final = max(_max_k(pass_k_final), _max_k(avg_k_final), 1)
     samples_per_task_search = max(_max_k(pass_k_search), _max_k(avg_k_final), 1)
-    generate_pass_k = (1,) if args.probe_only else pass_k_final
-    if args.probe_only:
-        sample_limit = max(args.batch_size, PROBE_MIN_SAMPLES)
-        cot_sampling = cot_sampling.clamp(PROBE_COT_MAX_TOKENS)
-        final_sampling = final_sampling.clamp(PROBE_FINAL_MAX_TOKENS)
-        probe_output_path = _make_probe_output_path(out_path.suffix or ".jsonl")
-        result = pipeline.run(
-            dataset_path=str(dataset_path),
-            output_path=str(probe_output_path),
-            cot_sampling=cot_sampling,
-            final_sampling=final_sampling,
-            batch_size=batch_size,
-            sample_limit=sample_limit,
-            pad_to_batch=True,
-            pass_k=generate_pass_k,
-            samples_per_task=1,
-            write_output=False,
-        )
-        print(
-            "🧪 probe-only run completed: "
-            f"{result.sample_count} sample(s) evaluated with batch {args.batch_size}."
-        )
-        if probe_output_path:
-            probe_output_path.unlink(missing_ok=True)
-        return 0
 
     metrics: FreeResponseMetrics
     param_summary: dict[str, object] | None = None
     output_path = out_path
-    effective_cot = cot_sampling
-    effective_final = final_sampling
-    if _should_enable_param_search(args, slug):
+    if _should_enable_param_search(args, slug) and not args.probe_only:
         param_trials = _resolve_param_search_trials(args)
         search_pass_k = pass_k_final if args.pass_k else pass_k_search
         result, metrics, param_summary, best_cot, best_final = _run_param_search(
@@ -506,10 +473,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             final_sampling=final_sampling,
             batch_size=batch_size,
             sample_limit=sample_limit,
-            pad_to_batch=False,
+            pad_to_batch=bool(args.probe_only),
             pass_k=pass_k_final,
             samples_per_task=samples_per_task_final,
+            probe_only=args.probe_only,
         )
+        if args.probe_only:
+            return 0
 
     pass_metrics_all = compute_pass_at_k(metrics.samples, pass_k_final)
     if pass_metrics_all:

@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Sequence
-import uuid
 
 import torch
 
@@ -18,17 +16,11 @@ from src.eval.results.layout import eval_details_path, jsonl_path, write_scores_
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
 from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path, safe_slug
 from src.eval.scheduler.profiler import update_batch_cache_locked
-from src.eval.evaluators.multi_choice import MultipleChoicePipeline, COT_SAMPLING
+from src.eval.evaluators.multi_choice import (
+    MultipleChoicePipeline,
+    COT_SAMPLING,
+)
 from src.infer.model import ModelLoadConfig
-
-
-PROBE_MIN_SAMPLES = 1
-PROBE_COT_MAX_TOKENS = 256
-
-
-def _make_probe_output_path(suffix: str = ".jsonl") -> Path:
-    temp_root = Path(tempfile.gettempdir())
-    return temp_root / f"rwkv_probe_{uuid.uuid4().hex}{suffix}"
 
 
 def _is_cuda_oom(exc: BaseException) -> bool:
@@ -121,18 +113,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Quick validation of dataset readability before heavy model init
     _ = JsonlMultipleChoiceLoader(str(dataset_path)).load()
 
-    probe_only = bool(args.probe_only)
+    if args.probe_only:
+        batch_size = max(1, args.batch_size)
+        _ = pipeline.run_chain_of_thought(
+            dataset_path=str(dataset_path),
+            output_path=str(out_path),
+            cot_sampling=COT_SAMPLING,
+            batch_size=batch_size,
+            sample_limit=batch_size,
+            min_prompt_count=batch_size,
+            probe_only=True,
+            write_output=False,
+        )
+        print(f"🧪 probe-only run completed: {batch_size} sample(s) evaluated with batch {args.batch_size}.")
+        return 0
+
+    probe_only = False
     sample_limit: int | None = args.max_samples
     cot_sampling = COT_SAMPLING
     output_path = out_path
-    probe_output_path: Path | None = None
     min_prompt_count: int | None = None
-    if probe_only:
-        sample_limit = max(args.batch_size, PROBE_MIN_SAMPLES)
-        cot_sampling = cot_sampling.clamp(PROBE_COT_MAX_TOKENS)
-        probe_output_path = _make_probe_output_path(out_path.suffix or ".jsonl")
-        output_path = probe_output_path
-        min_prompt_count = max(1, args.batch_size)
 
     target_batch = max(1, args.batch_size)
     effective_batch = target_batch
@@ -164,15 +164,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 torch.cuda.empty_cache()
             attempt_batch = fallback
             continue
-
-    if probe_only:
-        print(
-            "🧪 probe-only run completed: "
-            f"{result.sample_count} sample(s) evaluated with batch {args.batch_size}."
-        )
-        if probe_output_path:
-            probe_output_path.unlink(missing_ok=True)
-        return 0
 
     if effective_batch != target_batch:
         job_name = os.environ.get("RWKV_SKILLS_JOB_NAME")

@@ -102,20 +102,29 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = ModelLoadConfig(weights_path=args.model_path, device=args.device)
     pipeline = CodingPipeline(config)
+    batch_size = max(1, args.batch_size)
     default_pass_k = (1,)
-    pass_k = tuple(args.pass_k) if args.pass_k else default_pass_k
+    pass_k = (1,) if args.probe_only else (tuple(args.pass_k) if args.pass_k else default_pass_k)
+    sample_limit = batch_size if args.probe_only else args.max_samples
     result = pipeline.run_mbpp(
         dataset_path=str(dataset_path),
         output_path=str(out_path),
         sampling=sampling,
-        batch_size=max(1, args.batch_size),
-        sample_limit=args.max_samples,
+        batch_size=batch_size,
+        sample_limit=sample_limit,
         eval_timeout=args.eval_timeout,
         eval_workers=args.eval_workers,
         pass_k=pass_k,
         probe_only=args.probe_only,
         write_output=not args.probe_only,
     )
+
+    if args.probe_only:
+        print(
+            "🧪 probe-only run completed: "
+            f"{result.sample_count} sample(s) evaluated with batch {args.batch_size}."
+        )
+        return 0
 
     print(f"✅ MBPP 生成完成：{result.sample_count} completions -> {result.output_path}")
     relocated = None

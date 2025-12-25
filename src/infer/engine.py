@@ -46,8 +46,9 @@ class InferenceEngine:
         sampling: SamplingConfig,
         batch_size: int,
         progress_desc: str = "Generating",
+        probe_only: bool = False,
     ) -> list[GenerationOutput]:
-        return _continuous_batching(self.model, self.tokenizer, prompts, sampling, batch_size, progress_desc)
+        return _continuous_batching(self.model, self.tokenizer, prompts, sampling, batch_size, progress_desc, probe_only)
 
 
 @dataclass(slots=True)
@@ -63,7 +64,7 @@ class _ActiveTask:
 def _torch_top_k_top_p(logits: torch.Tensor, top_k: int, top_p: float) -> torch.Tensor:
     """Lightweight torch fallback for top-k/top-p sampling on CUDA."""
 
-    use_top_k = top_k is not None and top_k > 0 and top_k < logits.size(-1)
+    use_top_k = top_k is not None and 0 < top_k < logits.size(-1)
     if use_top_k:
         logits, topk_idx = torch.topk(logits, top_k, dim=-1)
     else:
@@ -114,6 +115,7 @@ def _continuous_batching(
     sampling: SamplingConfig,
     batch_size: int,
     progress_desc: str,
+    probe_only: bool = False,
 ) -> list[GenerationOutput]:
     if not prompts:
         return []
@@ -195,7 +197,7 @@ def _continuous_batching(
             if new_token is None:
                 continue
             reached_stop = new_token in stop_tokens
-            reached_length = len(task.generated_tokens) >= sampling.max_generate_tokens
+            reached_length = len(task.generated_tokens) >= (sampling.max_generate_tokens if not probe_only else 1)
             if not reached_stop:
                 task.pending_tokens.append(new_token)
                 task.generated_tokens.append(new_token)
@@ -293,7 +295,7 @@ def _continuous_batching(
             try:
                 text = tokenizer.decode(tokens)
                 break
-            except Exception:
+            except:
                 tokens = tokens[:-1]
         output.text = text
 

@@ -20,7 +20,6 @@ from .dataset_utils import (
     make_dataset_slug,
     safe_slug,
 )
-from .perf import perf_logger
 
 
 MULTICHOICE_DEFAULT_SPLITS: dict[str, str] = {

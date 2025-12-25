@@ -163,10 +163,14 @@ class MultipleChoicePipeline:
         dataset_name: str | None = None,
         sample_limit: int | None = None,
         min_prompt_count: int | None = None,
+        probe_only: bool = False,
+        write_output: bool = True,
     ) -> MultipleChoicePipelineResult:
         records, resolved_name = self._load_records(dataset_path, sample_limit)
         dataset_name = dataset_name or resolved_name
         templates = _select_prompt_templates(dataset_name)
+        write_output = write_output and (not probe_only)
+        batch_size = max(1, int(batch_size))
         if min_prompt_count and min_prompt_count > len(records) and records:
             repeats = (min_prompt_count + len(records) - 1) // len(records)
             records = (records * repeats)[:min_prompt_count]
@@ -175,23 +179,38 @@ class MultipleChoicePipeline:
         if final_answer_template is None:
             final_answer_template = templates.final
 
-        resume = detect_resume_state(output_path)
-        start_index = min(resume.next_index, len(records))
-        if start_index and len(records):
-            remaining = max(len(records) - start_index, 0)
-            print(f"⏩ 多选 CoT 恢复运行：已完成 {start_index}/{len(records)}，剩余 {remaining}")
+        if probe_only and records:
+            if len(records) >= batch_size:
+                records = records[:batch_size]
+            else:
+                repeat = (batch_size + len(records) - 1) // len(records)
+                records = (records * repeat)[:batch_size]
+
+        if write_output:
+            resume = detect_resume_state(output_path)
+            start_index = min(resume.next_index, len(records))
+            if start_index and len(records):
+                remaining = max(len(records) - start_index, 0)
+                print(f"⏩ 多选 CoT 恢复运行：已完成 {start_index}/{len(records)}，剩余 {remaining}")
+        else:
+            start_index = 0
+            resume = None
         remaining_records = records[start_index:]
         if not remaining_records:
             return MultipleChoicePipelineResult(dataset_name, len(records), Path(output_path))
 
-        writer = JsonlStageWriter(output_path, resume=resume.has_progress)
         prompts = [self._format_prompt(record, cot_prompt_template) for record in remaining_records]
         outputs = self.engine.generate(
             prompts,
             sampling=cot_sampling,
             batch_size=batch_size,
-            progress_desc="Generating CoT",
+            progress_desc="Generating CoT" if not probe_only else "Probing CoT",
+            probe_only=probe_only,
         )
+        if probe_only or not write_output:
+            return MultipleChoicePipelineResult(dataset_name, len(records), Path(output_path))
+
+        writer = JsonlStageWriter(output_path, resume=bool(resume and resume.has_progress))
         cot_by_idx = {item.prompt_index: item for item in outputs}
         for local_idx, record in enumerate(remaining_records):
             global_idx = start_index + local_idx
