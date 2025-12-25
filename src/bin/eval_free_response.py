@@ -13,12 +13,10 @@ from typing import Sequence
 import optuna
 
 from src.eval.metrics.free_response import (
-    FreeResponseMetrics,
     compute_pass_at_k,
     compute_avg_at_k,
-    evaluate_exact,
-    load_samples,
-    write_sample_results,
+    evaluate_free_response,
+    FreeResponseEvaluation,
 )
 from src.eval.results.layout import (
     eval_details_path,
@@ -283,7 +281,7 @@ def _run_single_eval(
     pass_k: tuple[int, ...],
     samples_per_task: int,
     probe_only: bool = False,
-) -> tuple[FreeResponsePipelineResult, FreeResponseMetrics | None]:
+) -> tuple[FreeResponsePipelineResult, FreeResponseEvaluation | None]:
     result = pipeline.run(
         dataset_path=dataset_path,
         output_path=str(output_path),
@@ -298,9 +296,13 @@ def _run_single_eval(
     )
     if probe_only:
         return result, None
-    samples = load_samples(output_path)
-    metrics = evaluate_exact(samples)
-    return result, metrics
+    evaluation = evaluate_free_response(
+        output_path,
+        dataset_path=dataset_path,
+        eval_output_path=None,
+        judge=None,
+    )
+    return result, evaluation
 
 
 def _run_param_search(
@@ -319,7 +321,7 @@ def _run_param_search(
     samples_per_task: int,
 ) -> tuple[
     FreeResponsePipelineResult,
-    FreeResponseMetrics,
+    FreeResponseEvaluation,
     dict[str, object],
     SamplingConfig,
     SamplingConfig,
@@ -329,7 +331,7 @@ def _run_param_search(
 
     search_records: list[dict[str, object]] = []
     trial_results: dict[
-        int, tuple[FreeResponsePipelineResult, FreeResponseMetrics, Path, SamplingConfig, SamplingConfig]
+        int, tuple[FreeResponsePipelineResult, FreeResponseEvaluation, Path, SamplingConfig, SamplingConfig]
     ] = {}
 
     def objective(trial: optuna.Trial) -> float:
@@ -353,23 +355,27 @@ def _run_param_search(
             pass_k=pass_k,
             samples_per_task=samples_per_task,
         )
-        samples = load_samples(candidate_path)
-        metrics = evaluate_exact(samples)
+        evaluation = evaluate_free_response(
+            candidate_path,
+            dataset_path=dataset_path,
+            eval_output_path=None,
+            judge=None,
+        )
         record = {
             "trial": idx,
-            "exact_accuracy": metrics.exact_accuracy,
-            "samples": len(samples),
+            "exact_accuracy": evaluation.exact_accuracy,
+            "samples": evaluation.samples,
             "log_path": str(candidate_path),
             "cot_sampling": _sampling_config_to_dict(cot_cfg),
             "final_sampling": _sampling_config_to_dict(final_cfg),
         }
         search_records.append(record)
-        trial_results[trial.number] = (result, metrics, candidate_path, cot_cfg, final_cfg)
+        trial_results[trial.number] = (result, evaluation, candidate_path, cot_cfg, final_cfg)
         trial.set_user_attr("log_path", str(candidate_path))
         trial.set_user_attr("cot_sampling", record["cot_sampling"])
         trial.set_user_attr("final_sampling", record["final_sampling"])
-        trial.set_user_attr("samples", len(samples))
-        return metrics.exact_accuracy
+        trial.set_user_attr("samples", evaluation.samples)
+        return evaluation.exact_accuracy
 
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=trials, show_progress_bar=False)
@@ -378,7 +384,7 @@ def _run_param_search(
     best_tuple = trial_results.get(best.number)
     if not best_tuple:
         raise RuntimeError("Optuna 未返回最佳 trial 结果")
-    best_result, best_metrics, best_path, best_cot_cfg, best_final_cfg = best_tuple
+    best_result, best_eval, best_path, best_cot_cfg, best_final_cfg = best_tuple
     if base_output_path.exists():
         base_output_path.unlink(missing_ok=True)
     if best_path != base_output_path:
@@ -403,7 +409,7 @@ def _run_param_search(
         "best_final_sampling": best.user_attrs.get("final_sampling"),
         "records_path": str(records_path),
     }
-    return best_result, best_metrics, summary, best_cot_cfg, best_final_cfg
+    return best_result, best_eval, summary, best_cot_cfg, best_final_cfg
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
@@ -430,13 +436,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     samples_per_task_final = max(_max_k(pass_k_final), _max_k(avg_k_final), 1)
     samples_per_task_search = max(_max_k(pass_k_search), _max_k(avg_k_final), 1)
 
-    metrics: FreeResponseMetrics
+    evaluation: FreeResponseEvaluation | None = None
     param_summary: dict[str, object] | None = None
     output_path = out_path
     if _should_enable_param_search(args, slug) and not args.probe_only:
         param_trials = _resolve_param_search_trials(args)
         search_pass_k = pass_k_final if args.pass_k else pass_k_search
-        result, metrics, param_summary, best_cot, best_final = _run_param_search(
+        result, evaluation, param_summary, best_cot, best_final = _run_param_search(
             pipeline,
             dataset_path=str(dataset_path),
             base_output_path=out_path,
@@ -452,7 +458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         effective_cot = best_cot
         effective_final = best_final
-        result, metrics = _run_single_eval(
+        result, evaluation = _run_single_eval(
             pipeline,
             dataset_path=str(dataset_path),
             output_path=out_path,
@@ -465,7 +471,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             samples_per_task=samples_per_task_final,
         )
     else:
-        result, metrics = _run_single_eval(
+        result, evaluation = _run_single_eval(
             pipeline,
             dataset_path=str(dataset_path),
             output_path=out_path,
@@ -481,41 +487,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.probe_only:
             return 0
 
-    pass_metrics_all = compute_pass_at_k(metrics.samples, pass_k_final)
-    if pass_metrics_all:
-        metrics.pass_at_k = pass_metrics_all
-    avg_metrics_all = compute_avg_at_k(metrics.samples, avg_k_final)
-    if avg_metrics_all:
-        metrics.avg_at_k = avg_metrics_all
-
     eval_path = eval_details_path(slug, is_cot=True, model_name=Path(args.model_path).stem)
-    write_sample_results(metrics.samples, eval_path)
+    evaluation = evaluate_free_response(
+        out_path,
+        dataset_path=str(dataset_path),
+        eval_output_path=eval_path,
+        judge=None,
+    )
+    pass_metrics_all = compute_pass_at_k(evaluation.rows, pass_k_final)
+    avg_metrics_all = compute_avg_at_k(evaluation.rows, avg_k_final)
     task_details: dict[str, object] = {"eval_details_path": str(eval_path)}
     if param_summary:
         task_details["param_search"] = param_summary
     metrics_payload = {
-        "exact_accuracy": metrics.exact_accuracy,
-        "judge_accuracy": metrics.judge_accuracy,
+        "exact_accuracy": evaluation.exact_accuracy,
+        "judge_accuracy": evaluation.judge_accuracy,
     }
-    pass_payload = _filter_metrics_by_k(metrics.pass_at_k, report_pass_k, "pass@") or (
-        metrics.pass_at_k or {}
-    )
+    pass_payload = _filter_metrics_by_k(pass_metrics_all, report_pass_k, "pass@") or (pass_metrics_all or {})
     if pass_payload:
         metrics_payload.update(pass_payload)
-    avg_payload = _filter_metrics_by_k(metrics.avg_at_k, report_avg_k, "avg@") or (metrics.avg_at_k or {})
+    avg_payload = _filter_metrics_by_k(avg_metrics_all, report_avg_k, "avg@") or (avg_metrics_all or {})
     if avg_payload:
         metrics_payload.update(avg_payload)
-    if metrics.pass_at_k and pass_payload != metrics.pass_at_k:
-        task_details["pass_curve"] = metrics.pass_at_k
-    if metrics.avg_at_k and avg_payload != metrics.avg_at_k:
-        task_details["avg_curve"] = metrics.avg_at_k
+    if pass_metrics_all and pass_payload != pass_metrics_all:
+        task_details["pass_curve"] = pass_metrics_all
+    if avg_metrics_all and avg_payload != avg_metrics_all:
+        task_details["avg_curve"] = avg_metrics_all
 
     score_path = write_scores_json(
         slug,
         is_cot=True,
         model_name=Path(args.model_path).stem,
         metrics=metrics_payload,
-        samples=result.sample_count,
+        samples=evaluation.samples,
         problems=result.problem_count,
         log_path=output_path,
         task="free_response",

@@ -11,7 +11,7 @@ from typing import Sequence
 import torch
 
 from src.eval.datasets.data_loader.multiple_choice import JsonlMultipleChoiceLoader
-from src.eval.metrics.multi_choice import evaluate_predictions, load_predictions, write_prediction_details
+from src.eval.metrics.multi_choice import evaluate_multiple_choice
 from src.eval.results.layout import eval_details_path, jsonl_path, write_scores_json
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
 from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path, safe_slug
@@ -172,20 +172,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         if job_name and model_slug and gpu:
             _update_batch_cache(job_name, model_slug, gpu, effective_batch)
 
-    preds = load_predictions(output_path)
-    metrics = evaluate_predictions(preds)
     eval_path = eval_details_path(slug, is_cot=True, model_name=Path(args.model_path).stem)
-    write_prediction_details(metrics.predictions, eval_path)
+    metrics = evaluate_multiple_choice(
+        output_path,
+        dataset_path=dataset_path,
+        eval_output_path=eval_path,
+    )
     score_path = write_scores_json(
         slug,
         is_cot=True,
         model_name=Path(args.model_path).stem,
         metrics={"accuracy": metrics.accuracy},
-        samples=len(preds),
+        samples=metrics.samples,
         log_path=out_path,
         task="multiple_choice_cot",
         task_details={
-            "accuracy_by_subject": metrics.score_by_subject,
+            "accuracy_by_subject": metrics.accuracy_by_subject,
             "eval_details_path": str(eval_path),
         },
     )

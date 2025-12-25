@@ -62,28 +62,19 @@ def _pick_logits_token(logits: Any) -> str | None:
 def convert_record_to_emoji_chat(record: dict[str, Any]) -> list[dict[str, str]]:
     chat: list[dict[str, str]] = []
 
-    for idx in (1, 2):
+    idx = 1
+    while True:
         prompt_key = f"prompt{idx}"
-        output_key = f"output{idx}"
-        logits_key = f"logits{idx}"
-
+        completion_key = f"completion{idx}"
+        if prompt_key not in record and completion_key not in record:
+            break
         prompt = record.get(prompt_key)
-        if prompt is None and idx == 1:
-            prompt = record.get("prompt")
-
-        if prompt is None:
-            continue
-
+        completion = record.get(completion_key)
+        if prompt is None or completion is None:
+            break
         chat.append({"😺": str(prompt)})
-
-        assistant: str | None = None
-        output = record.get(output_key)
-        if output is not None:
-            assistant = str(output)
-        else:
-            assistant = _pick_logits_token(record.get(logits_key))
-
-        chat.append({"🤖": assistant if assistant is not None else ""})
+        chat.append({"🤖": str(completion)})
+        idx += 1
 
     return chat
 
@@ -182,4 +173,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-

@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-"""Shared helper structures for evaluator pipelines (JSONL 输出 & 调试工具)."""
+"""Shared helper structures for evaluator pipelines (JSONL 输出 & 调试工具).
+
+This module defines the canonical schema for `results/completions` JSONL files.
+
+Contract (per line):
+- benchmark_name: str
+- dataset_split: str
+- sample_index: int
+- repeat_index: int
+- sampling_config: dict (only stages that actually sampled)
+- promptN / completionN / stop_reasonN for N=1..K
+
+No other fields are permitted in completions artifacts.
+"""
 
 from dataclasses import dataclass, field
 import errno
@@ -31,29 +44,31 @@ class ProbeConfig:
 @dataclass(slots=True)
 class StageRecord:
     prompt: str
-    output: str | None = None
-    finish_reason: str | None = None
-    logits: dict[str, float] | None = None
+    completion: str
+    stop_reason: str
 
 
 @dataclass(slots=True)
 class SampleRecord:
-    index: int
-    dataset: str
+    benchmark_name: str
+    dataset_split: str
+    sample_index: int
+    repeat_index: int
     stages: list[StageRecord]
-    metadata: dict = field(default_factory=dict)
+    sampling_config: dict = field(default_factory=dict)
 
     def as_payload(self) -> dict:
-        payload = {"sample_index": self.index, "dataset": self.dataset}
+        payload = {
+            "benchmark_name": self.benchmark_name,
+            "dataset_split": self.dataset_split,
+            "sample_index": int(self.sample_index),
+            "repeat_index": int(self.repeat_index),
+            "sampling_config": self.sampling_config or {},
+        }
         for idx, stage in enumerate(self.stages, start=1):
             payload[f"prompt{idx}"] = stage.prompt
-            if stage.output is not None:
-                payload[f"output{idx}"] = stage.output
-            if stage.finish_reason is not None:
-                payload[f"finish_reason{idx}"] = stage.finish_reason
-            if stage.logits is not None:
-                payload[f"logits{idx}"] = stage.logits
-        payload.update(self.metadata)
+            payload[f"completion{idx}"] = stage.completion
+            payload[f"stop_reason{idx}"] = stage.stop_reason
         return payload
 
 
@@ -225,10 +240,11 @@ def _env_flag(value: str | None) -> bool:
     return lowered not in {"", "0", "false", "no", "off"}
 
 
-def detect_resume_state(path: str | Path) -> ResumeState:
+def detect_resume_state(path: str | Path, *, repeats: int = 1) -> ResumeState:
     target = Path(path)
     if not target.exists():
         return ResumeState(next_index=0, completed=0, append=False)
+    repeats = max(1, int(repeats))
     seen: set[int] = set()
     try:
         with target.open("r", encoding="utf-8") as fh:
@@ -240,9 +256,13 @@ def detect_resume_state(path: str | Path) -> ResumeState:
                     payload = orjson.loads(line)
                 except orjson.JSONDecodeError:
                     continue
-                idx = payload.get("sample_index")
-                if isinstance(idx, int) and idx >= 0:
-                    seen.add(idx)
+                sample_index = payload.get("sample_index")
+                repeat_index = payload.get("repeat_index", 0)
+                if not (isinstance(sample_index, int) and sample_index >= 0):
+                    continue
+                if not (isinstance(repeat_index, int) and repeat_index >= 0):
+                    continue
+                seen.add(sample_index * repeats + repeat_index)
     except OSError:
         return ResumeState(next_index=0, completed=0, append=False)
 
@@ -252,7 +272,7 @@ def detect_resume_state(path: str | Path) -> ResumeState:
     return ResumeState(next_index=next_index, completed=len(seen), append=next_index > 0)
 
 
-def _max_sample_id(path: Path) -> int | None:
+def _max_repeat_index(path: Path) -> int | None:
     if not path.exists():
         return None
     max_id: int | None = None
@@ -266,24 +286,24 @@ def _max_sample_id(path: Path) -> int | None:
                     payload = orjson.loads(line)
                 except orjson.JSONDecodeError:
                     continue
-                sample_id = payload.get("sample_id")
-                if isinstance(sample_id, int) and sample_id >= 0:
-                    if max_id is None or sample_id > max_id:
-                        max_id = sample_id
+                repeat_index = payload.get("repeat_index")
+                if isinstance(repeat_index, int) and repeat_index >= 0:
+                    if max_id is None or repeat_index > max_id:
+                        max_id = repeat_index
     except OSError:
         return None
     return max_id
 
 
 def ensure_resume_samples_compatible(path: Path, samples_per_task: int) -> None:
-    max_id = _max_sample_id(path)
+    max_id = _max_repeat_index(path)
     if max_id is None:
         return
     required = max_id + 1
     if samples_per_task >= required:
         return
     raise ValueError(
-        f"已有日志 {path} 含 sample_id={max_id}，需要每题至少 {required} 个样本才能继续（由 pass-k 最大值决定）；"
+        f"已有日志 {path} 含 repeat_index={max_id}，需要每题至少 {required} 个样本才能继续（由 pass-k/avg-k 最大值决定）；"
         "请删除旧日志或使用不小于该值的生成次数重试。"
     )
 

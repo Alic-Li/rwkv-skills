@@ -14,6 +14,7 @@ from src.eval.results.layout import eval_details_path, jsonl_path, write_scores_
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
 from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
 from src.eval.evaluators.coding import CodingPipeline, DEFAULT_CODE_SAMPLING
+from src.eval.metrics.code_generation.evaluate import evaluate_human_eval
 from src.infer.model import ModelLoadConfig
 
 
@@ -53,32 +54,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="pass@k values to report (default: 1)",
     )
     return parser.parse_args(argv)
-
-
-def _finalize_eval_details(
-    details_path: Path | None,
-    *,
-    dataset_slug: str,
-    model_path: str,
-) -> Path | None:
-    if not details_path:
-        return None
-    target = eval_details_path(dataset_slug, is_cot=False, model_name=Path(model_path).stem)
-    source = Path(details_path)
-    if not source.exists():
-        return None
-    try:
-        if source.resolve() == target.resolve():
-            return target
-    except OSError:
-        pass
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), target)
-    except OSError as exc:
-        print(f"⚠️ 无法移动评测详情到 {target}: {exc}")
-        return source
-    return target
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -128,21 +103,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     print(f"✅ HumanEval生成完成：{result.sample_count} completions -> {result.output_path}")
-    if result.eval_results:
-        relocated = _finalize_eval_details(result.eval_details_path, dataset_slug=slug, model_path=args.model_path)
-        result.eval_details_path = relocated
-        print(f"HumanEval 评测: {result.eval_results} (详情: {relocated})")
+
+    eval_path = eval_details_path(slug, is_cot=False, model_name=Path(args.model_path).stem)
+    eval_metrics = evaluate_human_eval(
+        out_path,
+        dataset_path=str(dataset_path),
+        eval_output_path=eval_path,
+        pass_k=pass_k,
+        n_workers=args.eval_workers,
+        timeout=args.eval_timeout,
+    )
+    print(f"HumanEval 评测: {eval_metrics} (详情: {eval_path})")
     score_path = write_scores_json(
         slug,
         is_cot=False,
         model_name=Path(args.model_path).stem,
-        metrics=result.eval_results or {},
+        metrics=eval_metrics or {},
         samples=result.sample_count,
         problems=result.problem_count,
         log_path=out_path,
         task="code_humaneval",
         task_details={
-            "eval_details_path": str(result.eval_details_path) if result.eval_details_path else None
+            "eval_details_path": str(eval_path),
         },
     )
     print(f"📊 scores saved: {score_path}")

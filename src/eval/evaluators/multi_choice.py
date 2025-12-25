@@ -13,6 +13,7 @@ from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
 from src.infer.engine import InferenceEngine
 from src.infer.model import ModelLoadConfig, load_rwkv_model
 from src.infer.sampling import SamplingConfig
+from src.eval.results.schema import dataset_slug_parts, normalize_sampling_config_by_stage, prompt_delta
 from .common import JsonlStageWriter, SampleRecord, StageRecord, detect_resume_state
 
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -108,11 +109,12 @@ class MultipleChoicePipeline:
     ) -> MultipleChoicePipelineResult:
         records, resolved_name = self._load_records(dataset_path, sample_limit)
         dataset_name = dataset_name or resolved_name
+        benchmark_name, dataset_split = dataset_slug_parts(dataset_name)
         templates = _select_prompt_templates(dataset_name)
         if prompt_template is None:
             prompt_template = templates.direct
 
-        resume = detect_resume_state(output_path)
+        resume = detect_resume_state(output_path, repeats=1)
         start_index = min(resume.next_index, len(records))
         if start_index and len(records):
             remaining = max(len(records) - start_index, 0)
@@ -124,28 +126,23 @@ class MultipleChoicePipeline:
         writer = JsonlStageWriter(output_path, resume=resume.has_progress)
         for idx, record in indexed_records:
             prompt = self._format_prompt(record, prompt_template)
-            logits_map, pred_letter = self._score_prompt(record, prompt)
+            _, pred_letter = self._score_prompt(record, prompt)
+            token_text = self.target_token_format.replace("<LETTER>", pred_letter)
             stages = [
                 StageRecord(
                     prompt=prompt,
-                    logits=logits_map,
-                    finish_reason="logits_only",
+                    completion=token_text,
+                    stop_reason="logits_only",
                 )
             ]
-            metadata = {
-                "question": record.question,
-                "choices": {ALPHABET[i]: text for i, text in enumerate(record.choices)},
-                "answer": ALPHABET[record.answer_index],
-                "predicted": pred_letter,
-                "subject": record.subject,
-                "correct": pred_letter == ALPHABET[record.answer_index],
-            }
             writer.write(
                 SampleRecord(
-                    index=idx,
-                    dataset=dataset_name,
+                    benchmark_name=benchmark_name,
+                    dataset_split=dataset_split,
+                    sample_index=idx,
+                    repeat_index=0,
+                    sampling_config={},
                     stages=stages,
-                    metadata=metadata,
                 )
             )
         writer.close()
@@ -168,6 +165,7 @@ class MultipleChoicePipeline:
     ) -> MultipleChoicePipelineResult:
         records, resolved_name = self._load_records(dataset_path, sample_limit)
         dataset_name = dataset_name or resolved_name
+        benchmark_name, dataset_split = dataset_slug_parts(dataset_name)
         templates = _select_prompt_templates(dataset_name)
         write_output = write_output and (not probe_only)
         batch_size = max(1, int(batch_size))
@@ -187,7 +185,7 @@ class MultipleChoicePipeline:
                 records = (records * repeat)[:batch_size]
 
         if write_output:
-            resume = detect_resume_state(output_path)
+            resume = detect_resume_state(output_path, repeats=1)
             start_index = min(resume.next_index, len(records))
             if start_index and len(records):
                 remaining = max(len(records) - start_index, 0)
@@ -211,6 +209,7 @@ class MultipleChoicePipeline:
             return MultipleChoicePipelineResult(dataset_name, len(records), Path(output_path))
 
         writer = JsonlStageWriter(output_path, resume=bool(resume and resume.has_progress))
+        sampling_config = normalize_sampling_config_by_stage([(1, cot_sampling)])
         cot_by_idx = {item.prompt_index: item for item in outputs}
         for local_idx, record in enumerate(remaining_records):
             global_idx = start_index + local_idx
@@ -220,34 +219,31 @@ class MultipleChoicePipeline:
             cot_prompt = prompts[local_idx]
             cot_stage = StageRecord(
                 prompt=cot_prompt,
-                output=cot_seq.text,
-                finish_reason=cot_seq.finish_reason,
+                completion=cot_seq.text,
+                stop_reason=cot_seq.finish_reason,
             )
             final_prompt = (
                 (final_answer_template or EN_FINAL_ANSWER_TEMPLATE)
                 .replace("<Q>", cot_prompt)
                 .replace("<COT>", cot_seq.text)
             )
-            logits_map, pred_letter = self._score_prompt(record, final_prompt)
+            _, pred_letter = self._score_prompt(record, final_prompt)
+            prior_context = f"{cot_prompt}{cot_seq.text}"
+            delta_prompt = prompt_delta(final_prompt, prior_context)
+            token_text = self.target_token_format.replace("<LETTER>", pred_letter)
             final_stage = StageRecord(
-                prompt=final_prompt,
-                logits=logits_map,
-                finish_reason="logits_only",
+                prompt=delta_prompt,
+                completion=token_text,
+                stop_reason="logits_only",
             )
-            metadata = {
-                "question": record.question,
-                "choices": {ALPHABET[i]: text for i, text in enumerate(record.choices)},
-                "answer": ALPHABET[record.answer_index],
-                "predicted": pred_letter,
-                "subject": record.subject,
-                "correct": pred_letter == ALPHABET[record.answer_index],
-            }
             writer.write(
                 SampleRecord(
-                    index=global_idx,
-                    dataset=dataset_name,
+                    benchmark_name=benchmark_name,
+                    dataset_split=dataset_split,
+                    sample_index=global_idx,
+                    repeat_index=0,
+                    sampling_config=sampling_config,
                     stages=[cot_stage, final_stage],
-                    metadata=metadata,
                 )
             )
         writer.close()

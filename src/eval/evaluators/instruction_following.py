@@ -14,6 +14,8 @@ from src.eval.datasets.data_struct.instruction_following import (
 from src.infer.engine import InferenceEngine
 from src.infer.model import ModelLoadConfig, load_rwkv_model
 from src.infer.sampling import SamplingConfig
+from src.eval.results.schema import dataset_slug_parts, normalize_sampling_config_by_stage
+from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
 from .common import JsonlStageWriter, SampleRecord, StageRecord, detect_resume_state
 
 DEFAULT_STOP_TOKENS = (0, 261, 24281)
@@ -58,6 +60,7 @@ class InstructionFollowingPipeline:
     ) -> InstructionFollowingPipelineResult:
         records, resolved_name = self._load_records(dataset_path, sample_limit)
         dataset_name = dataset_name or resolved_name
+        benchmark_name, dataset_split = dataset_slug_parts(dataset_name)
         repeats = max(1, samples_per_prompt or 1)
         expanded: list[tuple[int, InstructionFollowingRecord, int]] = []
         for idx, record in enumerate(records):
@@ -66,7 +69,7 @@ class InstructionFollowingPipeline:
         if not expanded:
             return InstructionFollowingPipelineResult(dataset_name, 0, Path(output_path))
 
-        resume = detect_resume_state(output_path)
+        resume = detect_resume_state(output_path, repeats=repeats)
         start_index = min(resume.next_index, len(expanded))
         if start_index and len(expanded):
             remaining = max(len(expanded) - start_index, 0)
@@ -80,6 +83,7 @@ class InstructionFollowingPipeline:
             effective_ban = () if enable_think else (DEFAULT_BAN_TOKEN,)
 
         sampling_cfg = replace(sampling, stop_tokens=stop_tokens, ban_tokens=effective_ban)
+        sampling_config = normalize_sampling_config_by_stage([(1, sampling_cfg)])
 
         writer = JsonlStageWriter(output_path, resume=resume.has_progress)
         prompts = [self._make_prompt(record.prompt, enable_think) for _, record, _ in remaining_records]
@@ -91,31 +95,22 @@ class InstructionFollowingPipeline:
         )
         output_by_idx = {item.prompt_index: item for item in outputs}
         for local_idx, (problem_idx, record, sample_id) in enumerate(remaining_records):
-            global_idx = start_index + local_idx
             seq = output_by_idx.get(local_idx)
             if seq is None:
                 continue
-            cleaned = seq.text.split("</think>")[-1].strip() if enable_think else seq.text.strip()
-            metadata = {
-                "key": record.key,
-                "instruction_ids": record.instruction_ids,
-                "kwargs": record.kwargs_list,
-                "prompt": record.prompt,
-                "response_clean": cleaned,
-                "sample_id": sample_id,
-                "problem_index": problem_idx,
-            }
             stage = StageRecord(
                 prompt=prompts[local_idx],
-                output=seq.text,
-                finish_reason=seq.finish_reason,
+                completion=seq.text,
+                stop_reason=seq.finish_reason,
             )
             writer.write(
                 SampleRecord(
-                    index=global_idx,
-                    dataset=dataset_name,
+                    benchmark_name=benchmark_name,
+                    dataset_split=dataset_split,
+                    sample_index=problem_idx,
+                    repeat_index=sample_id,
+                    sampling_config=sampling_config,
                     stages=[stage],
-                    metadata=metadata,
                 )
             )
         writer.close()
@@ -133,7 +128,7 @@ class InstructionFollowingPipeline:
         records = list(dataset)
         if sample_limit is not None and sample_limit > 0:
             records = records[: min(sample_limit, len(records))]
-        return records, Path(dataset_path).stem
+        return records, infer_dataset_slug_from_path(dataset_path)
 
 
 __all__ = ["InstructionFollowingPipeline", "InstructionFollowingPipelineResult"]

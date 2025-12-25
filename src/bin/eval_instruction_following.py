@@ -9,12 +9,7 @@ from typing import Sequence
 
 from dataclasses import replace
 
-from src.eval.metrics.instruction_following.metrics import (
-    evaluate_samples,
-    load_samples_from_jsonl,
-    compute_avg_at_k,
-    write_sample_results,
-)
+from src.eval.metrics.instruction_following.metrics import evaluate_instruction_following
 from src.eval.results.layout import eval_details_path, jsonl_path, write_scores_json
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
 from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path, canonical_slug
@@ -128,13 +123,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         ban_tokens=ban_tokens,
         samples_per_prompt=samples_per_prompt,
     )
-    samples = load_samples_from_jsonl(out_path)
-    metrics = evaluate_samples(samples, strict=True)
-    avg_metrics_all = compute_avg_at_k(metrics.samples, avg_k_final)
-    if avg_metrics_all:
-        metrics.avg_at_k = avg_metrics_all
     eval_path = eval_details_path(slug, is_cot=False, model_name=Path(args.model_path).stem)
-    write_sample_results(metrics.samples, eval_path)
+    metrics = evaluate_instruction_following(
+        out_path,
+        dataset_path=str(dataset_path),
+        eval_output_path=eval_path,
+        strict=True,
+        avg_k=avg_k_final,
+    )
     avg_payload = _filter_metrics_by_k(metrics.avg_at_k, report_avg_k, "avg@") or (metrics.avg_at_k or {})
     score_path = write_scores_json(
         slug,
@@ -145,7 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "instruction_accuracy": metrics.instruction_accuracy,
             **avg_payload,
         },
-        samples=len(samples),
+        samples=metrics.samples,
         log_path=out_path,
         task="instruction_following",
         task_details={

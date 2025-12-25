@@ -8,6 +8,8 @@ from typing import Any, Iterable
 
 from src.eval.datasets.data_loader.free_answer import JsonlFreeAnswerLoader
 from src.eval.datasets.data_struct.free_answer import FreeAnswerRecord
+from src.eval.results.schema import dataset_slug_parts, normalize_sampling_config_by_stage, prompt_delta
+from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
 from src.infer.engine import InferenceEngine
 from src.infer.model import ModelLoadConfig, load_rwkv_model
 from src.infer.sampling import SamplingConfig
@@ -118,6 +120,7 @@ class FreeResponsePipeline:
         raw_records, resolved_name = self._load_records(dataset_path, sample_limit)
         problem_count = len(raw_records)
         dataset_name = dataset_name or resolved_name
+        benchmark_name, dataset_split = dataset_slug_parts(dataset_name)
         target_path = Path(output_path)
         expanded: list[tuple[int, FreeAnswerRecord, int]] = []
         repeats = max(1, samples_per_task)
@@ -132,7 +135,7 @@ class FreeResponsePipeline:
             return FreeResponsePipelineResult(dataset_name, 0, target_path, problem_count)
 
         if write_output and not probe_only:
-            resume = detect_resume_state(target_path)
+            resume = detect_resume_state(target_path, repeats=repeats)
             if resume.has_progress:
                 ensure_resume_samples_compatible(target_path, samples_per_task)
             start_index = min(resume.next_index, len(expanded))
@@ -185,42 +188,35 @@ class FreeResponsePipeline:
             return FreeResponsePipelineResult(dataset_name, len(expanded), target_path, problem_count)
 
         final_by_idx = {item.prompt_index: item for item in final_outputs}
+        sampling_config = normalize_sampling_config_by_stage([(1, cot_sampling), (2, final_sampling)])
 
         for local_idx, (problem_idx, record, sample_id) in enumerate(remaining_entries):
-            global_idx = start_index + local_idx
             cot_seq = cot_by_idx.get(local_idx)
             ans_seq = final_by_idx.get(local_idx)
             if cot_seq is None or ans_seq is None:
                 continue
-            prediction = ans_seq.text.strip()
-            answer_text = _resolve_reference_answer(record)
+            prior_context = f"{cot_prompts[local_idx]}{cot_seq.text}"
+            delta_prompt2 = prompt_delta(final_prompts[local_idx], prior_context)
             stages = [
                 StageRecord(
                     prompt=cot_prompts[local_idx],
-                    output=cot_seq.text,
-                    finish_reason=cot_seq.finish_reason,
+                    completion=cot_seq.text,
+                    stop_reason=cot_seq.finish_reason,
                 ),
                 StageRecord(
-                    prompt=final_prompts[local_idx],
-                    output=ans_seq.text,
-                    finish_reason=ans_seq.finish_reason,
+                    prompt=delta_prompt2,
+                    completion=ans_seq.text,
+                    stop_reason=ans_seq.finish_reason,
                 ),
             ]
-            metadata = {
-                "question": record.question,
-                "answer": answer_text,
-                "prediction": prediction,
-                "subject": record.subject,
-                "correct_exact": prediction == answer_text,
-                "problem_index": problem_idx,
-                "sample_id": sample_id,
-            }
             writer.write(
                 SampleRecord(
-                    index=global_idx,
-                    dataset=dataset_name,
+                    benchmark_name=benchmark_name,
+                    dataset_split=dataset_split,
+                    sample_index=problem_idx,
+                    repeat_index=sample_id,
+                    sampling_config=sampling_config,
                     stages=stages,
-                    metadata=metadata,
                 )
             )
         writer.close()
@@ -236,7 +232,7 @@ class FreeResponsePipeline:
             records.append(record)
             if limited and len(records) >= sample_limit:
                 break
-        return records, Path(dataset_path).stem
+        return records, infer_dataset_slug_from_path(dataset_path)
 
 
 __all__ = ["FreeResponsePipeline", "FreeResponsePipelineResult"]

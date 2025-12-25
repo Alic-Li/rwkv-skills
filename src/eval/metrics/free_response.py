@@ -1,54 +1,34 @@
 from __future__ import annotations
 
-"""Free-form QA metrics：支持 exact match 和 LLM judge。"""
+"""Free-form QA evaluation over canonical `results/completions` JSONL."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import json
 import re
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable
 import unicodedata
 
 import orjson
 
 from openai import OpenAI
 
-
-@dataclass(slots=True)
-class FreeResponseSample:
-    sample_index: int
-    dataset: str
-    question: str
-    answer: str
-    prediction: str
-    subject: str | None
-    cot: str | None
-    problem_index: int | None = None
-    sample_id: int | None = None
-
-
-@dataclass(slots=True)
-class FreeResponseSampleResult:
-    sample: FreeResponseSample
-    correct_exact: bool
-    judge_correct: bool | None = None
-
-
-@dataclass(slots=True)
-class FreeResponseMetrics:
-    exact_accuracy: float
-    judge_accuracy: float | None
-    samples: list[FreeResponseSampleResult]
-    pass_at_k: dict[str, float] | None = None
-    avg_at_k: dict[str, float] | None = None
-
+from src.eval.datasets.data_loader.free_answer import JsonlFreeAnswerLoader
+from src.eval.datasets.data_struct.free_answer import FreeAnswerRecord
+from src.eval.metrics.at_k import compute_avg_at_k, compute_pass_at_k
+from src.eval.results.schema import make_eval_payload
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_PREFERRED_ANSWER_KEYS = (
+    "expected_answer",
+    "reference_answer",
+    "target",
+    "final_answer",
+)
 
 
 def _normalize_text(value: str) -> str:
-    """Collapse common formatting artefacts (LaTeX spacing, double spaces, NBSP)."""
     if not value:
         return ""
     normalized = unicodedata.normalize("NFKC", value)
@@ -57,145 +37,61 @@ def _normalize_text(value: str) -> str:
     return normalized
 
 
-def load_samples(path: str | Path) -> list[FreeResponseSample]:
-    path = Path(path)
-    samples: list[FreeResponseSample] = []
-    with path.open("r", encoding="utf-8") as fh:
+def _normalize_answer_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized if normalized else None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        normalized = str(value)
+        return normalized.strip() or None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def resolve_reference_answer(record: FreeAnswerRecord) -> str:
+    metadata = record.metadata or {}
+    for key in _PREFERRED_ANSWER_KEYS:
+        normalized = _normalize_answer_value(metadata.get(key))
+        if normalized:
+            return normalized
+    raw_record = metadata.get("raw_record")
+    if isinstance(raw_record, dict):
+        for key in _PREFERRED_ANSWER_KEYS:
+            normalized = _normalize_answer_value(raw_record.get(key))
+            if normalized:
+                return normalized
+    return record.answer
+
+
+def _iter_jsonl(path: str | Path) -> Iterable[dict]:
+    with Path(path).open("r", encoding="utf-8") as fh:
         for line in fh:
-            payload = json.loads(line)
-            dataset = payload.get("dataset", path.stem)
-            sample_index = int(payload.get("sample_index", len(samples)))
-            question = payload.get("question", "")
-            answer = payload.get("answer", "")
-            subject = payload.get("subject")
-            cot = payload.get("output1")
-            prediction = payload.get("prediction") or payload.get("output2") or ""
-            samples.append(
-                FreeResponseSample(
-                    sample_index=sample_index,
-                    dataset=dataset,
-                    question=question,
-                    answer=answer,
-                    prediction=prediction.strip(),
-                    subject=subject,
-                    cot=cot,
-                    problem_index=payload.get("problem_index"),
-                    sample_id=payload.get("sample_id"),
-                )
-            )
-    return samples
-
-
-def evaluate_exact(samples: Iterable[FreeResponseSample]) -> FreeResponseMetrics:
-    results: list[FreeResponseSampleResult] = []
-    total = 0
-    correct = 0
-    for sample in samples:
-        normalized_prediction = _normalize_text(sample.prediction)
-        normalized_answer = _normalize_text(sample.answer)
-        is_correct = normalized_prediction == normalized_answer
-        results.append(FreeResponseSampleResult(sample, correct_exact=is_correct))
-        total += 1
-        if is_correct:
-            correct += 1
-    accuracy = correct / total if total else 0.0
-    return FreeResponseMetrics(exact_accuracy=accuracy, judge_accuracy=None, samples=results)
-
-
-def _estimate_pass_at_k(total: int, correct: int, k: int) -> float:
-    if total - correct < k:
-        return 1.0
-    product = 1.0
-    for n in range(total - correct + 1, total + 1):
-        product *= 1.0 - k / n
-    return 1.0 - product
-
-
-def compute_pass_at_k(
-    samples: Iterable[FreeResponseSampleResult],
-    ks: Sequence[int],
-    *,
-    use_judge: bool = False,
-) -> dict[str, float]:
-    grouped: dict[str, list[bool]] = {}
-    for result in samples:
-        sample = result.sample
-        flag = result.correct_exact
-        if use_judge and result.judge_correct is not None:
-            flag = result.judge_correct
-        if flag is None:
-            continue
-        flag_bool = bool(flag)
-        if sample.problem_index is not None:
-            key = f"{sample.dataset}:{sample.problem_index}"
-        elif sample.question:
-            key = f"{sample.dataset}:q:{sample.question.strip()}"
-        else:
-            key = f"{sample.dataset}:idx:{sample.sample_index}"
-        grouped.setdefault(key, []).append(flag_bool)
-
-    totals: list[int] = []
-    corrects: list[int] = []
-    for values in grouped.values():
-        totals.append(len(values))
-        corrects.append(sum(1 for flag in values if flag))
-
-    metrics: dict[str, float] = {}
-    for k in ks:
-        k = int(k)
-        if k <= 0:
-            continue
-        acc_values: list[float] = []
-        for total, correct in zip(totals, corrects):
-            if total < k:
+            line = line.strip()
+            if not line:
                 continue
-            acc_values.append(_estimate_pass_at_k(total, correct, k))
-        if acc_values:
-            metrics[f"pass@{k}"] = sum(acc_values) / len(acc_values)
-    return metrics
+            yield json.loads(line)
 
 
-def compute_avg_at_k(
-    samples: Iterable[FreeResponseSampleResult],
-    ks: Sequence[int],
-    *,
-    use_judge: bool = False,
-) -> dict[str, float]:
-    """Compute average accuracy across the first k samples for each problem."""
+def _max_stage_index(payload: dict) -> int:
+    stage = 0
+    for key in payload:
+        if key.startswith("completion") and key.removeprefix("completion").isdigit():
+            stage = max(stage, int(key.removeprefix("completion")))
+    return stage
 
-    grouped: dict[str, list[tuple[int, bool]]] = {}
-    for result in samples:
-        sample = result.sample
-        flag = result.correct_exact
-        if use_judge and result.judge_correct is not None:
-            flag = result.judge_correct
-        if flag is None:
-            continue
-        sample_key = f"{sample.dataset}:idx:{sample.sample_index}"
-        if sample.problem_index is not None:
-            sample_key = f"{sample.dataset}:{sample.problem_index}"
-        elif sample.question:
-            sample_key = f"{sample.dataset}:q:{sample.question.strip()}"
-        sample_id = sample.sample_id if sample.sample_id is not None else sample.sample_index
-        grouped.setdefault(sample_key, []).append((int(sample_id), bool(flag)))
 
-    metrics: dict[str, float] = {}
-    for k in ks:
-        k = int(k)
-        if k <= 0:
-            continue
-        correct = 0
-        total = 0
-        for entries in grouped.values():
-            ordered = sorted(entries, key=lambda pair: pair[0])
-            if len(ordered) < k:
-                continue
-            selected = ordered[:k]
-            correct += sum(1 for _, flag in selected if flag)
-            total += k
-        if total > 0:
-            metrics[f"avg@{k}"] = correct / total
-    return metrics
+@dataclass(slots=True)
+class FreeResponseEvaluation:
+    exact_accuracy: float
+    judge_accuracy: float | None
+    samples: int
+    rows: list[tuple[int, int, bool]]
 
 
 @dataclass(slots=True)
@@ -207,8 +103,8 @@ class LLMJudgeConfig:
     prompt_template: str = (
         "You are a rigorous AI judge. Your task is to evaluate whether a student's "
         "answer is semantically completely equivalent to the reference answer, based on "
-        "the provided question and reference answer.\n\nInput:\nQuestion: <Q>\nReference Answer: <REF>\n"
-        "Student's Answer: <A>\n\nOutput Format:\nStrictly adhere to the output format: Only output 'True' or 'False'."
+        "the provided question and reference answer.\\n\\nInput:\\nQuestion: <Q>\\nReference Answer: <REF>\\n"
+        "Student's Answer: <A>\\n\\nOutput Format:\\nStrictly adhere to the output format: Only output 'True' or 'False'."
     )
 
 
@@ -217,16 +113,15 @@ class LLMJudge:
         self.config = config
         self.client = OpenAI(api_key=config.api_key, base_url=config.base_url)
 
-    def judge(self, samples: Iterable[FreeResponseSampleResult]) -> None:
-        pending = [sample for sample in samples if sample.judge_correct is None]
-        if not pending:
-            return
+    def judge(self, items: list[tuple[str, str, str]]) -> list[bool]:
+        """Return judge flags for (question, reference, prediction) items."""
 
-        def worker(sample: FreeResponseSampleResult) -> bool:
+        def worker(entry: tuple[str, str, str]) -> bool:
+            question, reference, prediction = entry
             prompt = self.config.prompt_template
-            prompt = prompt.replace("<Q>", sample.sample.question)
-            prompt = prompt.replace("<REF>", sample.sample.answer)
-            prompt = prompt.replace("<A>", sample.sample.prediction)
+            prompt = prompt.replace("<Q>", question)
+            prompt = prompt.replace("<REF>", reference)
+            prompt = prompt.replace("<A>", prediction)
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 stream=False,
@@ -238,70 +133,101 @@ class LLMJudge:
                 raise ValueError(f"LLM judge 输出非法值: {content}")
             return content == "True"
 
+        results: list[bool] = [False for _ in range(len(items))]
         with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
-            futures = {
-                executor.submit(worker, sample): sample for sample in pending
-            }
+            futures = {executor.submit(worker, entry): idx for idx, entry in enumerate(items)}
             for future in as_completed(futures):
-                sample = futures[future]
-                sample.judge_correct = future.result()
+                idx = futures[future]
+                results[idx] = future.result()
+        return results
 
 
-def evaluate_with_judge(samples: Iterable[FreeResponseSample], judge: LLMJudge) -> FreeResponseMetrics:
-    metrics = evaluate_exact(samples)
-    judge.judge(metrics.samples)
-    total = 0
-    correct = 0
-    for sample in metrics.samples:
-        if sample.judge_correct is None:
-            continue
-        total += 1
-        if sample.judge_correct:
-            correct += 1
-    judge_accuracy = correct / total if total else None
-    metrics.judge_accuracy = judge_accuracy
-    return metrics
+def evaluate_free_response(
+    completions_path: str | Path,
+    *,
+    dataset_path: str | Path,
+    eval_output_path: str | Path | None,
+    judge: LLMJudge | None = None,
+) -> FreeResponseEvaluation:
+    """Evaluate free-response completions and write canonical evaluator JSONL."""
 
+    dataset = list(JsonlFreeAnswerLoader(str(dataset_path)))
+    eval_path = Path(eval_output_path) if eval_output_path is not None else None
+    if eval_path is not None:
+        eval_path.parent.mkdir(parents=True, exist_ok=True)
 
-# ---------------------------------------------------------------------------
-# Eval JSONL helpers
-# ---------------------------------------------------------------------------
-def write_sample_results(
-    results: Iterable[FreeResponseSampleResult],
-    path: str | Path,
-) -> Path:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("wb") as fh:
-        for result in results:
-            sample = result.sample
-            payload = {
-                "sample_index": sample.sample_index,
-                "dataset": sample.dataset,
-                "question": sample.question,
-                "answer": sample.answer,
-                "prediction": sample.prediction,
-                "subject": sample.subject,
-                "cot": sample.cot,
-                "correct_exact": result.correct_exact,
-                "judge_correct": result.judge_correct,
-                "problem_index": sample.problem_index,
-                "sample_id": sample.sample_id,
-            }
-            fh.write(orjson.dumps(payload, option=orjson.OPT_APPEND_NEWLINE))
-    return target
+    payloads: list[dict] = []
+    exact_flags: list[bool] = []
+    judge_inputs: list[tuple[str, str, str]] = []
+
+    # First pass: compute exact + gather judge inputs
+    for payload in _iter_jsonl(completions_path):
+        sample_index = int(payload.get("sample_index", 0))
+        if sample_index < 0 or sample_index >= len(dataset):
+            prediction = ""
+            reference = ""
+            question = ""
+            exact = False
+        else:
+            record = dataset[sample_index]
+            question = record.question
+            reference = resolve_reference_answer(record)
+            last_stage = _max_stage_index(payload)
+            prediction = str(payload.get(f"completion{last_stage}", "")).strip()
+            exact = _normalize_text(prediction) == _normalize_text(reference)
+
+        payloads.append(payload)
+        exact_flags.append(bool(exact))
+        if judge is not None:
+            judge_inputs.append((question, reference, prediction))
+
+    judge_flags: list[bool] | None = None
+    if judge is not None:
+        judge_flags = judge.judge(judge_inputs)
+
+    # Second pass: write eval rows
+    rows_for_at_k: list[tuple[int, int, bool]] = []
+    total_exact = sum(1 for flag in exact_flags if flag)
+    total_judge = sum(1 for flag in (judge_flags or []) if flag) if judge_flags is not None else 0
+
+    if eval_path is not None:
+        with eval_path.open("wb") as out_f:
+            for idx, payload in enumerate(payloads):
+                sample_index = int(payload.get("sample_index", 0))
+                repeat_index = int(payload.get("repeat_index", 0))
+                if judge_flags is not None:
+                    passed = bool(judge_flags[idx])
+                else:
+                    passed = bool(exact_flags[idx])
+                rows_for_at_k.append((sample_index, repeat_index, passed))
+                out_f.write(orjson.dumps(make_eval_payload(payload, is_passed=passed), option=orjson.OPT_APPEND_NEWLINE))
+    else:
+        for idx, payload in enumerate(payloads):
+            sample_index = int(payload.get("sample_index", 0))
+            repeat_index = int(payload.get("repeat_index", 0))
+            if judge_flags is not None:
+                passed = bool(judge_flags[idx])
+            else:
+                passed = bool(exact_flags[idx])
+            rows_for_at_k.append((sample_index, repeat_index, passed))
+
+    samples = len(payloads)
+    exact_accuracy = total_exact / samples if samples else 0.0
+    judge_accuracy = (total_judge / samples) if (judge_flags is not None and samples) else None
+    return FreeResponseEvaluation(
+        exact_accuracy=exact_accuracy,
+        judge_accuracy=judge_accuracy,
+        samples=samples,
+        rows=rows_for_at_k,
+    )
 
 
 __all__ = [
-    "FreeResponseSample",
-    "FreeResponseSampleResult",
-    "FreeResponseMetrics",
-    "load_samples",
-    "evaluate_exact",
     "LLMJudge",
     "LLMJudgeConfig",
-    "evaluate_with_judge",
-    "write_sample_results",
-    "compute_pass_at_k",
+    "FreeResponseEvaluation",
+    "evaluate_free_response",
     "compute_avg_at_k",
+    "compute_pass_at_k",
+    "resolve_reference_answer",
 ]

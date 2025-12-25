@@ -12,10 +12,7 @@ from src.eval.metrics.free_response import (
     LLMJudgeConfig,
     compute_pass_at_k,
     compute_avg_at_k,
-    evaluate_exact,
-    evaluate_with_judge,
-    load_samples,
-    write_sample_results,
+    evaluate_free_response,
 )
 from src.eval.results.layout import eval_details_path, jsonl_path, write_scores_json
 from src.eval.scheduler.dataset_resolver import resolve_or_prepare_dataset
@@ -225,7 +222,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_output=not args.probe_only,
     )
 
-    samples = load_samples(output_path)
+    # Evaluate from canonical completions (no reference/metrics fields inside).
     judge_model = (
         args.judge_model
         or os.environ.get("JUDGE_MODEL")
@@ -244,8 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         or os.environ.get("API_BASE")
     )
 
-    metrics = evaluate_exact(samples)
-    use_judge = False
+    judge: LLMJudge | None = None
     if judge_model and judge_api_key:
         judge = LLMJudge(
             LLMJudgeConfig(
@@ -254,39 +250,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 base_url=judge_base_url,
             )
         )
-        metrics = evaluate_with_judge(samples, judge)
-        use_judge = True
-    pass_metrics_all = compute_pass_at_k(metrics.samples, pass_k_final, use_judge=use_judge)
-    if pass_metrics_all:
-        metrics.pass_at_k = pass_metrics_all
-    avg_metrics_all = compute_avg_at_k(metrics.samples, avg_k_final, use_judge=use_judge)
-    if avg_metrics_all:
-        metrics.avg_at_k = avg_metrics_all
     eval_path = eval_details_path(slug, is_cot=True, model_name=Path(args.model_path).stem)
-    write_sample_results(metrics.samples, eval_path)
+    evaluation = evaluate_free_response(
+        output_path,
+        dataset_path=str(dataset_path),
+        eval_output_path=eval_path,
+        judge=judge,
+    )
+    pass_metrics_all = compute_pass_at_k(evaluation.rows, pass_k_final)
+    avg_metrics_all = compute_avg_at_k(evaluation.rows, avg_k_final)
     metrics_payload = {
-        "exact_accuracy": metrics.exact_accuracy,
-        "judge_accuracy": metrics.judge_accuracy,
+        "exact_accuracy": evaluation.exact_accuracy,
+        "judge_accuracy": evaluation.judge_accuracy,
     }
-    pass_payload = _filter_metrics_by_k(metrics.pass_at_k, report_pass_k, "pass@") or (metrics.pass_at_k or {})
+    pass_payload = _filter_metrics_by_k(pass_metrics_all, report_pass_k, "pass@") or (pass_metrics_all or {})
     if pass_payload:
         metrics_payload.update(pass_payload)
-    avg_payload = _filter_metrics_by_k(metrics.avg_at_k, report_avg_k, "avg@") or (metrics.avg_at_k or {})
+    avg_payload = _filter_metrics_by_k(avg_metrics_all, report_avg_k, "avg@") or (avg_metrics_all or {})
     if avg_payload:
         metrics_payload.update(avg_payload)
     task_details = {
         "eval_details_path": str(eval_path),
     }
-    if metrics.pass_at_k and pass_payload != metrics.pass_at_k:
-        task_details["pass_curve"] = metrics.pass_at_k
-    if metrics.avg_at_k and avg_payload != metrics.avg_at_k:
-        task_details["avg_curve"] = metrics.avg_at_k
+    if pass_metrics_all and pass_payload != pass_metrics_all:
+        task_details["pass_curve"] = pass_metrics_all
+    if avg_metrics_all and avg_payload != avg_metrics_all:
+        task_details["avg_curve"] = avg_metrics_all
     score_path = write_scores_json(
         slug,
         is_cot=True,
         model_name=Path(args.model_path).stem,
         metrics=metrics_payload,
-        samples=result.sample_count,
+        samples=evaluation.samples,
         problems=result.problem_count,
         log_path=out_path,
         task="free_response_judge",

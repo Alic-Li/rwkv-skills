@@ -8,7 +8,8 @@ from typing import Iterable
 
 from src.eval.datasets.data_loader.code_generation import JsonlCodeGenerationLoader
 from src.eval.datasets.data_struct.code_generation import CodeGenerationRecord
-from src.eval.metrics.code_generation.human_eval import evaluate_functional_correctness
+from src.eval.results.schema import dataset_slug_parts, normalize_sampling_config_by_stage
+from src.eval.scheduler.dataset_utils import infer_dataset_slug_from_path
 from src.infer.engine import InferenceEngine
 from src.infer.model import ModelLoadConfig, load_rwkv_model
 from src.infer.sampling import SamplingConfig
@@ -61,8 +62,6 @@ class CodingPipelineResult:
     sample_count: int
     output_path: Path
     problem_count: int
-    eval_results: dict[str, float] | None = None
-    eval_details_path: Path | None = None
 
 
 class CodingPipeline:
@@ -90,6 +89,7 @@ class CodingPipeline:
         samples_per_task = 1 if probe_only else max(1, max(pass_k) if pass_k else 1)
         write_output = write_output and (not probe_only)
         records, dataset_name = self._load_records(dataset_path, sample_limit)
+        benchmark_name, dataset_split = dataset_slug_parts(dataset_name)
         if not records:
             return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
@@ -119,7 +119,7 @@ class CodingPipeline:
                 entries.append((prompt_text, record, rec_idx, sample_idx))
 
         target_path = Path(output_path)
-        resume = detect_resume_state(target_path)
+        resume = detect_resume_state(target_path, repeats=samples_per_task)
         if resume.has_progress:
             ensure_resume_samples_compatible(target_path, samples_per_task)
         start_index = min(resume.next_index, len(entries))
@@ -141,51 +141,34 @@ class CodingPipeline:
                 return CodingPipelineResult(dataset_name, len(outputs), target_path, len(records))
 
             writer = JsonlStageWriter(target_path, resume=resume.has_progress)
+            sampling_config = normalize_sampling_config_by_stage([(1, sampling)])
             for local_idx, (prompt_text, record, rec_idx, sample_idx) in enumerate(pending_entries):
                 seq = output_by_idx.get(local_idx)
                 if seq is None:
                     continue
                 raw_output = seq.text or ""
-                completion = raw_output.rstrip()
                 stage = StageRecord(
                     prompt=prompt_text,
-                    output=raw_output,
-                    finish_reason=seq.finish_reason,
+                    completion=raw_output,
+                    stop_reason=seq.finish_reason,
                 )
-                metadata = {
-                    "task_id": getattr(record, "task_id", f"{dataset_name}_{rec_idx}"),
-                    "sample_id": sample_idx,
-                    "prompt_raw": record.prompt,
-                    "entry_point": record.entry_point,
-                    "canonical_solution": record.canonical_solution,
-                    "test": record.metadata.get("test") if record.metadata else None,
-                    "completion": completion,
-                }
                 writer.write(
                     SampleRecord(
-                        index=start_index + local_idx,
-                        dataset=dataset_name,
+                        benchmark_name=benchmark_name,
+                        dataset_split=dataset_split,
+                        sample_index=rec_idx,
+                        repeat_index=sample_idx,
+                        sampling_config=sampling_config,
                         stages=[stage],
-                        metadata=metadata,
                     )
                 )
             writer.close()
-
-        eval_results, eval_details_path = evaluate_functional_correctness(
-            sample_file=str(output_path),
-            k=tuple(pass_k),
-            n_workers=eval_workers,
-            timeout=eval_timeout,
-            problem_file=dataset_path,
-        )
 
         return CodingPipelineResult(
             dataset=dataset_name,
             sample_count=len(entries),
             output_path=target_path,
             problem_count=len(records),
-            eval_results=eval_results,
-            eval_details_path=Path(eval_details_path) if eval_details_path else None,
         )
 
     def run_mbpp(
@@ -208,6 +191,7 @@ class CodingPipeline:
         samples_per_task = 1 if probe_only else max(1, max(pass_k) if pass_k else 1)
         write_output = write_output and (not probe_only)
         records, dataset_name = self._load_records(dataset_path, sample_limit)
+        benchmark_name, dataset_split = dataset_slug_parts(dataset_name)
         if not records:
             return CodingPipelineResult(dataset_name, 0, Path(output_path), 0)
 
@@ -237,7 +221,7 @@ class CodingPipeline:
                 entries.append((prompt_text, record, rec_idx, sample_idx))
 
         target_path = Path(output_path)
-        resume = detect_resume_state(target_path)
+        resume = detect_resume_state(target_path, repeats=samples_per_task)
         if resume.has_progress:
             ensure_resume_samples_compatible(target_path, samples_per_task)
         start_index = min(resume.next_index, len(entries))
@@ -259,54 +243,34 @@ class CodingPipeline:
                 return CodingPipelineResult(dataset_name, len(outputs), target_path, len(records))
 
             writer = JsonlStageWriter(target_path, resume=resume.has_progress)
+            sampling_config = normalize_sampling_config_by_stage([(1, sampling)])
             for local_idx, (prompt_text, record, rec_idx, sample_idx) in enumerate(pending_entries):
                 seq = output_by_idx.get(local_idx)
                 if seq is None:
                     continue
                 raw_output = seq.text or ""
-                completion = raw_output.rstrip()
                 stage = StageRecord(
                     prompt=prompt_text,
-                    output=raw_output,
-                    finish_reason=seq.finish_reason,
+                    completion=raw_output,
+                    stop_reason=seq.finish_reason,
                 )
-                metadata = {
-                    "task_id": getattr(record, "task_id", f"{dataset_name}_{rec_idx}"),
-                    "sample_id": sample_idx,
-                    "prompt_raw": record.prompt,
-                    "entry_point": record.entry_point,
-                    "canonical_solution": record.canonical_solution,
-                    "completion": completion,
-                }
-                if record.test_cases is not None:
-                    metadata["test_cases"] = record.test_cases
                 writer.write(
                     SampleRecord(
-                        index=start_index + local_idx,
-                        dataset=dataset_name,
+                        benchmark_name=benchmark_name,
+                        dataset_split=dataset_split,
+                        sample_index=rec_idx,
+                        repeat_index=sample_idx,
+                        sampling_config=sampling_config,
                         stages=[stage],
-                        metadata=metadata,
                     )
                 )
             writer.close()
-
-        from src.eval.metrics.code_generation.mbpp import evaluate_mbpp
-
-        eval_results, eval_details_path = evaluate_mbpp(
-            sample_file=str(output_path),
-            k=tuple(pass_k),
-            n_workers=eval_workers,
-            timeout=eval_timeout,
-            problem_file=dataset_path,
-        )
 
         return CodingPipelineResult(
             dataset=dataset_name,
             sample_count=len(entries),
             output_path=target_path,
             problem_count=len(records),
-            eval_results=eval_results,
-            eval_details_path=Path(eval_details_path) if eval_details_path else None,
         )
 
     def _load_records(
@@ -317,7 +281,7 @@ class CodingPipeline:
         records = list(dataset)
         if sample_limit is not None and sample_limit > 0:
             records = records[: min(sample_limit, len(records))]
-        return records, Path(dataset_path).stem
+        return records, infer_dataset_slug_from_path(dataset_path)
 
 
 __all__ = ["CodingPipeline", "CodingPipelineResult", "DEFAULT_CODE_SAMPLING"]

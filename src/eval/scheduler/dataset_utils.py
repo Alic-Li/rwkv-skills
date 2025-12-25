@@ -59,6 +59,24 @@ def _strip_known_split_suffix(slug: str) -> str:
     return slug
 
 
+def split_benchmark_and_split(dataset_slug: str) -> tuple[str, str]:
+    """Split a canonical dataset slug into (benchmark_name, dataset_split).
+
+    The split suffix is detected using the same `_KNOWN_SPLIT_NAMES` logic that
+    powers benchmark canonicalisation. If no known suffix is found, the split
+    is returned as an empty string.
+    """
+    slug = canonical_slug(dataset_slug)
+    # Artifact-only stems (e.g. results/.../xxx__cot.jsonl) may surface here; strip them.
+    if slug.endswith("__cot"):
+        slug = slug[: -len("__cot")]
+    for split in sorted(_KNOWN_SPLIT_NAMES, key=len, reverse=True):
+        suffix = f"_{split}"
+        if slug.endswith(suffix):
+            return slug[: -len(suffix)], split
+    return slug, ""
+
+
 def make_dataset_slug(name: str, split: str) -> str:
     return canonical_slug(f"{name}_{split}")
 
@@ -119,4 +137,5 @@ __all__ = [
     "infer_dataset_slug_from_path",
     "make_dataset_slug",
     "safe_slug",
+    "split_benchmark_and_split",
 ]
