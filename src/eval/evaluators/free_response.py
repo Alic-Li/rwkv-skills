@@ -25,10 +25,10 @@ Therefore, the answer is \\(\\boxed{"""
 DEFAULT_COT_SAMPLING = SamplingConfig(
     max_generate_tokens=4096,
     temperature=0.3,
-    top_k=50,
-    top_p=0.3,
+    top_k=500,
+    top_p=0.4,
     alpha_presence=0.5,
-    alpha_frequency=0.5,
+    alpha_frequency=0.1,
     alpha_decay=0.99,
     stop_tokens=(0, 261, 24281),
 )

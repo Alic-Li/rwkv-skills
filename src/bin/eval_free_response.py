@@ -10,8 +10,6 @@ from pathlib import Path
 import shutil
 from typing import Sequence
 
-import optuna
-
 from src.eval.metrics.free_response import (
     compute_pass_at_k,
     compute_avg_at_k,
@@ -37,6 +35,7 @@ from src.infer.model import ModelLoadConfig
 from src.infer.sampling import SamplingConfig
 
 
+MAX_TRIALS_PER_MODE = 30
 DEFAULT_PARAM_SEARCH_TRIALS = 30
 # Free-response 默认只算 pass@1；高难数学集单独放宽
 DEFAULT_PASS_K = (1,)
@@ -84,6 +83,19 @@ SEARCH_PASS_K_OVERRIDES = {
 
 PARAM_SEARCH_DATASETS: set[str] = set()
 
+NORMAL_COT_SCAN_SPACE: dict[str, tuple[float, ...]] = {
+    "temperature": (0.3, 0.4, 0.6, 0.8),
+    "top_p": (0.3, 0.4, 0.5, 0.6),
+    "alpha_presence": (0.5, 1.0, 1.5, 2.0),
+    "alpha_frequency": (0.1, 0.3, 0.5),
+    "alpha_decay": (0.99,),
+}
+
+SIMPLE_COT_SCAN_SPACE: dict[str, tuple[float, ...]] = {
+    "temperature": (0.8, 0.6, 0.4, 0.3),
+    "noise": (1.0, 2.0, 3.0),
+}
+
 
 def _round_float(value: float, digits: int = 2) -> float:
     return round(float(value), digits)
@@ -127,7 +139,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--param-search-trials",
         type=int,
-        help=f"Number of Optuna trials to run when parameter search is enabled (default {DEFAULT_PARAM_SEARCH_TRIALS}).",
+        help=(
+            f"Max number of parameter-scan trials per sample_mode (default {DEFAULT_PARAM_SEARCH_TRIALS}, capped at {MAX_TRIALS_PER_MODE}). "
+            "Set to a small number for quick smoke tests."
+        ),
     )
     parser.add_argument(
         "--pass-k",
@@ -159,28 +174,6 @@ def _sampling_config_to_dict(config: SamplingConfig) -> dict[str, object]:
     return normalized
 
 
-def _suggest_sampling_configs(
-    trial: optuna.Trial,
-    base_cot: SamplingConfig,
-    base_final: SamplingConfig,
-) -> tuple[SamplingConfig, SamplingConfig]:
-    cot = replace(
-        base_cot,
-        temperature=_round_float(trial.suggest_float("cot_temperature", 0.15, 0.75)),
-        top_k=trial.suggest_categorical("cot_top_k", [32, 40, 48, 64, 80, 96]),
-        top_p=_round_float(trial.suggest_float("cot_top_p", 0.2, 0.7)),
-        alpha_presence=_round_float(trial.suggest_float("cot_alpha_presence", 0.3, 0.8)),
-        alpha_frequency=_round_float(trial.suggest_float("cot_alpha_frequency", 0.3, 0.8)),
-    )
-    final = replace(
-        base_final,
-        temperature=_round_float(trial.suggest_float("final_temperature", 0.3, 1.2)),
-        top_k=trial.suggest_categorical("final_top_k", [1, 2, 4, 8]),
-        top_p=_round_float(trial.suggest_float("final_top_p", 0.1, 0.75)),
-    )
-    return cot, final
-
-
 def _should_enable_param_search(args: argparse.Namespace, dataset_slug: str) -> bool:
     # 全局禁用参数扫描；仅显式开启时允许
     return bool(getattr(args, "param_search", False))
@@ -188,16 +181,16 @@ def _should_enable_param_search(args: argparse.Namespace, dataset_slug: str) -> 
 
 def _resolve_param_search_trials(args: argparse.Namespace) -> int:
     if args.param_search_trials and args.param_search_trials > 0:
-        return args.param_search_trials
+        return min(int(args.param_search_trials), MAX_TRIALS_PER_MODE)
     env_val = os.environ.get("RWKV_PARAM_SEARCH_TRIALS")
     if env_val:
         try:
             parsed = int(env_val)
             if parsed > 0:
-                return parsed
+                return min(parsed, MAX_TRIALS_PER_MODE)
         except ValueError:
             pass
-    return DEFAULT_PARAM_SEARCH_TRIALS
+    return min(DEFAULT_PARAM_SEARCH_TRIALS, MAX_TRIALS_PER_MODE)
 
 
 def _round_params_dict(data: dict[str, object]) -> dict[str, object]:
@@ -326,30 +319,49 @@ def _run_param_search(
     SamplingConfig,
     SamplingConfig,
 ]:
-    if trials <= 0:
+    def _extract_best_params(cfg: SamplingConfig) -> dict[str, object]:
+        mode = (cfg.sample_mode or "normal").strip().lower()
+        if mode == "simple":
+            return {
+                "sample_mode": "simple",
+                "temperature": _round_float(cfg.temperature),
+                "noise": _round_float(float(cfg.noise)),
+            }
+        return {
+            "sample_mode": "normal",
+            "temperature": _round_float(cfg.temperature),
+            "top_p": _round_float(cfg.top_p),
+            "alpha_presence": _round_float(cfg.alpha_presence),
+            "alpha_frequency": _round_float(cfg.alpha_frequency),
+            "alpha_decay": _round_float(cfg.alpha_decay),
+        }
+
+    per_mode_limit = int(trials) if trials and trials > 0 else DEFAULT_PARAM_SEARCH_TRIALS
+    per_mode_limit = min(per_mode_limit, MAX_TRIALS_PER_MODE)
+    if per_mode_limit <= 0:
         raise ValueError("参数扫描 trials 必须大于 0")
 
     search_records: list[dict[str, object]] = []
-    trial_results: dict[
-        int, tuple[FreeResponsePipelineResult, FreeResponseEvaluation, Path, SamplingConfig, SamplingConfig]
-    ] = {}
+    best_tuple: tuple[FreeResponsePipelineResult, FreeResponseEvaluation, Path, SamplingConfig] | None = None
+    best_trial_index: int | None = None
+    best_by_mode: dict[str, tuple[int, float, str, SamplingConfig]] = {}
+    trials_by_mode: dict[str, int] = {}
 
-    def objective(trial: optuna.Trial) -> float:
-        cot_cfg, final_cfg = _suggest_sampling_configs(trial, cot_sampling, final_sampling)
-        idx = trial.number + 1
+    def _run_trial(trial_idx: int, cot_cfg: SamplingConfig) -> FreeResponseEvaluation:
+        nonlocal best_tuple, best_trial_index
         candidate_path = param_search_trial_path(
             dataset_slug,
             is_cot=True,
             model_name=model_name,
-            trial_index=idx,
+            trial_index=trial_idx,
         )
         candidate_path.unlink(missing_ok=True)
-        print(f"🔍 参数扫描 trial {idx}/{trials}: {candidate_path.name}")
+        print(f"🔍 参数扫描 trial {trial_idx} ({cot_cfg.sample_mode}): {candidate_path.name}")
         result = pipeline.run(
             dataset_path=dataset_path,
             output_path=str(candidate_path),
             cot_sampling=cot_cfg,
-            final_sampling=final_cfg,
+            final_sampling=final_sampling,
             batch_size=batch_size,
             sample_limit=sample_limit,
             pass_k=pass_k,
@@ -362,29 +374,112 @@ def _run_param_search(
             judge=None,
         )
         record = {
-            "trial": idx,
+            "trial": trial_idx,
+            "sample_mode": cot_cfg.sample_mode,
             "exact_accuracy": evaluation.exact_accuracy,
             "samples": evaluation.samples,
             "log_path": str(candidate_path),
             "cot_sampling": _sampling_config_to_dict(cot_cfg),
-            "final_sampling": _sampling_config_to_dict(final_cfg),
+            "final_sampling": _sampling_config_to_dict(final_sampling),
+            "params": _extract_best_params(cot_cfg),
         }
         search_records.append(record)
-        trial_results[trial.number] = (result, evaluation, candidate_path, cot_cfg, final_cfg)
-        trial.set_user_attr("log_path", str(candidate_path))
-        trial.set_user_attr("cot_sampling", record["cot_sampling"])
-        trial.set_user_attr("final_sampling", record["final_sampling"])
-        trial.set_user_attr("samples", evaluation.samples)
-        return evaluation.exact_accuracy
 
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=trials, show_progress_bar=False)
+        mode = (cot_cfg.sample_mode or "normal").strip().lower()
+        trials_by_mode[mode] = trials_by_mode.get(mode, 0) + 1
+        mode_best = best_by_mode.get(mode)
+        if mode_best is None or float(evaluation.exact_accuracy) > float(mode_best[1]):
+            best_by_mode[mode] = (trial_idx, float(evaluation.exact_accuracy), str(candidate_path), cot_cfg)
 
-    best = study.best_trial
-    best_tuple = trial_results.get(best.number)
-    if not best_tuple:
-        raise RuntimeError("Optuna 未返回最佳 trial 结果")
-    best_result, best_eval, best_path, best_cot_cfg, best_final_cfg = best_tuple
+        if best_tuple is None or float(evaluation.exact_accuracy) > float(best_tuple[1].exact_accuracy):
+            best_tuple = (result, evaluation, candidate_path, cot_cfg)
+            best_trial_index = trial_idx
+        return evaluation
+
+    trial_idx = 0
+
+    # 1) normal (旧版常规 sampling)：先扫 temperature/top_p，再扫 alpha_presence/alpha_frequency；alpha_decay 固定
+    normal_remaining = per_mode_limit
+    alpha_decay = float(NORMAL_COT_SCAN_SPACE["alpha_decay"][0])
+    baseline_presence = float(NORMAL_COT_SCAN_SPACE["alpha_presence"][0])
+    baseline_frequency = float(NORMAL_COT_SCAN_SPACE["alpha_frequency"][0])
+    best_temp_top_p: tuple[float, float] | None = None
+    best_temp_top_p_acc: float | None = None
+
+    for temperature in NORMAL_COT_SCAN_SPACE["temperature"]:
+        for top_p in NORMAL_COT_SCAN_SPACE["top_p"]:
+            if normal_remaining <= 0:
+                break
+            trial_idx += 1
+            evaluation = _run_trial(
+                trial_idx,
+                replace(
+                    cot_sampling,
+                    sample_mode="normal",
+                    noise=0.0,
+                    temperature=float(temperature),
+                    top_p=float(top_p),
+                    alpha_presence=baseline_presence,
+                    alpha_frequency=baseline_frequency,
+                    alpha_decay=alpha_decay,
+                ),
+            )
+            normal_remaining -= 1
+            acc = float(evaluation.exact_accuracy)
+            if best_temp_top_p_acc is None or acc > best_temp_top_p_acc:
+                best_temp_top_p_acc = acc
+                best_temp_top_p = (float(temperature), float(top_p))
+        if normal_remaining <= 0:
+            break
+
+    if normal_remaining > 0 and best_temp_top_p is not None:
+        best_temperature, best_top_p = best_temp_top_p
+        for alpha_presence in NORMAL_COT_SCAN_SPACE["alpha_presence"]:
+            for alpha_frequency in NORMAL_COT_SCAN_SPACE["alpha_frequency"]:
+                if normal_remaining <= 0:
+                    break
+                trial_idx += 1
+                _ = _run_trial(
+                    trial_idx,
+                    replace(
+                        cot_sampling,
+                        sample_mode="normal",
+                        noise=0.0,
+                        temperature=best_temperature,
+                        top_p=best_top_p,
+                        alpha_presence=float(alpha_presence),
+                        alpha_frequency=float(alpha_frequency),
+                        alpha_decay=alpha_decay,
+                    ),
+                )
+                normal_remaining -= 1
+            if normal_remaining <= 0:
+                break
+
+    # 2) simple (albatross temp+noise)：扫 temperature/noise
+    simple_remaining = per_mode_limit
+    for temperature in SIMPLE_COT_SCAN_SPACE["temperature"]:
+        for noise in SIMPLE_COT_SCAN_SPACE["noise"]:
+            if simple_remaining <= 0:
+                break
+            trial_idx += 1
+            _ = _run_trial(
+                trial_idx,
+                replace(
+                    cot_sampling,
+                    sample_mode="simple",
+                    temperature=float(temperature),
+                    noise=float(noise),
+                ),
+            )
+            simple_remaining -= 1
+        if simple_remaining <= 0:
+            break
+
+    if best_tuple is None:
+        raise RuntimeError("参数扫描未生成任何可用 trial 结果")
+    best_result, best_eval, best_path, best_cot_cfg = best_tuple
+    best_final_cfg = final_sampling
     if base_output_path.exists():
         base_output_path.unlink(missing_ok=True)
     if best_path != base_output_path:
@@ -398,15 +493,37 @@ def _run_param_search(
             json.dump(row, fh, ensure_ascii=False)
             fh.write("\n")
 
+    best_mode_payload: dict[str, object] = {}
+    for mode, (trial_idx, acc, log_path, cot_cfg) in best_by_mode.items():
+        best_mode_payload[mode] = {
+            "best_trial": trial_idx,
+            "best_exact_accuracy": _round_float(acc),
+            "best_log_path": log_path,
+            "best_params": _extract_best_params(cot_cfg),
+            "best_cot_sampling": _sampling_config_to_dict(cot_cfg),
+        }
+
     summary = {
         "enabled": True,
-        "trials": trials,
-        "best_trial": best.number + 1,
-        "best_exact_accuracy": _round_float(best.value),
-        "best_params": _round_params_dict(best.params),
-        "best_log_path": best.user_attrs.get("log_path"),
-        "best_cot_sampling": best.user_attrs.get("cot_sampling"),
-        "best_final_sampling": best.user_attrs.get("final_sampling"),
+        "search_type": "grid",
+        "max_trials_per_mode": MAX_TRIALS_PER_MODE,
+        "trial_limit_per_mode": per_mode_limit,
+        "trials": len(search_records),
+        "trials_by_mode": {
+            "normal": int(trials_by_mode.get("normal", 0)),
+            "simple": int(trials_by_mode.get("simple", 0)),
+        },
+        "best_trial": int(best_trial_index) if best_trial_index is not None else None,
+        "best_exact_accuracy": _round_float(best_eval.exact_accuracy),
+        "best_params": _extract_best_params(best_cot_cfg),
+        "best_log_path": str(best_path),
+        "best_cot_sampling": _sampling_config_to_dict(best_cot_cfg),
+        "best_final_sampling": _sampling_config_to_dict(best_final_cfg),
+        "best_by_mode": best_mode_payload,
+        "scan_space": {
+            "normal": NORMAL_COT_SCAN_SPACE,
+            "simple": SIMPLE_COT_SCAN_SPACE,
+        },
         "records_path": str(records_path),
     }
     return best_result, best_eval, summary, best_cot_cfg, best_final_cfg

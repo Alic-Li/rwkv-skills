@@ -75,9 +75,9 @@ You can re-run only specific benchmarks with `--only-datasets aime24 aime25` (na
 The default model glob is configured in `src/eval/scheduler/config.py` (it only points to `weights/rwkv7-*.pth` within the repo; override as needed). Scheduler entry scripts are provided:
 `src/bin/eval_multi_choice.py`, `eval_multi_choice_cot.py`, `eval_free_response.py`, `eval_free_response_judge.py`, `eval_instruction_following.py`, `eval_code_human_eval.py`, `eval_code_mbpp.py`.
 
-Math QA sets that require LLM judging (e.g. `math_500_test` / `answer_judge_test` / `gaokao2023en_test`) are automatically dispatched to `eval_free_response_judge.py`; other free-response tasks still use `eval_free_response.py`'s exact-match logic.
+Math QA sets that require LLM judging (e.g. `gsm8k_test` / `math_500_test` / `answer_judge_test` / `gaokao2023en_test`) are automatically dispatched to `eval_free_response_judge.py`; other free-response tasks still use `eval_free_response.py`'s exact-match logic.
 
-High-difficulty math sets (e.g. `aime24_test` / `aime25_test` / `beyond_aime_test` / `hmmt_feb25_test` / `brumo25_test`) trigger Optuna sampling-parameter search by default in `eval_free_response.py` (30 trials; override with `--param-search-trials`). The best trial's sampling params are written to `task_details.param_search` in the score JSON. To skip the search, use `--no-param-search`, or force-enable it on other datasets with `--param-search`.
+Sampling-parameter scan can be enabled in `eval_free_response.py` via `--param-search` (optionally cap runs with `--param-search-trials`, max 30 per `sample_mode`). The scan sweeps CoT sampling in two modes: `normal` (temperature/top_p/alpha_*) first, then `simple` (albatross-style temperature+noise); answer-stage sampling stays fixed. The best trial's params are written to `task_details.param_search` in the score JSON.
 
 ## HumanEval code generation evaluation
 - Dataset prep: `prepare_dataset("human_eval", Path("data"))` downloads the official `HumanEval.jsonl.gz` and writes `data/human_eval/test.jsonl`.

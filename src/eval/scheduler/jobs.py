@@ -134,7 +134,7 @@ def _build_dataset_catalogues() -> tuple[
 
 LLM_JUDGE_DATASET_SLUGS: Final[tuple[str, ...]] = tuple(
     canonical_slug(slug)
-    for slug in ("math_500_test", "answer_judge_test", "gaokao2023en_test")
+    for slug in ("gsm8k_test", "math_500_test", "answer_judge_test", "gaokao2023en_test")
 )
 # judge-only 数据集不再调度到 free_response，避免 math_500 反复被 free_response 拉起
 MATH_DATASET_SLUGS_FOR_FREE_RESPONSE: Final[tuple[str, ...]] = tuple(

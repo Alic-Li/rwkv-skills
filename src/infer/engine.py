@@ -121,6 +121,15 @@ def _continuous_batching(
         return []
     batch_size = max(1, min(batch_size, len(prompts)))
 
+    sample_mode = (sampling.sample_mode or "normal").strip().lower()
+    if sample_mode not in {"normal", "simple"}:
+        print(f"⚠️ unknown sample_mode={sampling.sample_mode!r}; falling back to 'normal'.")
+        sample_mode = "normal"
+    is_simple = sample_mode == "simple"
+    noise = float(sampling.noise or 0.0)
+    if noise < 0:
+        noise = 0.0
+
     def _torch_sample(logits_tensor: torch.Tensor, *, force_cpu: bool = False) -> torch.Tensor:
         if force_cpu and logits_tensor.is_cuda:
             logits_tensor = logits_tensor.cpu()
@@ -145,7 +154,8 @@ def _continuous_batching(
 
     occurrence = torch.zeros((batch_size, vocab_size), dtype=torch.float32, device=device)
     alpha_presence_vector = torch.zeros_like(occurrence)
-    alpha_presence = torch.tensor(sampling.alpha_presence, dtype=torch.float32, device=device)
+    alpha_presence_value = 0.0 if is_simple else sampling.alpha_presence
+    alpha_presence = torch.tensor(alpha_presence_value, dtype=torch.float32, device=device)
     stop_tokens = set(sampling.stop_tokens)
     ban_tokens = tuple(sampling.ban_tokens or ())
     no_penalty = set(sampling.no_penalty_token_ids)
@@ -221,7 +231,7 @@ def _continuous_batching(
                 else:
                     accomplished.append(idx)
             else:
-                if new_token not in no_penalty:
+                if not is_simple and new_token not in no_penalty:
                     occurrence[idx, new_token] += 1.0
                     alpha_presence_vector[idx, new_token] = alpha_presence
 
@@ -256,10 +266,12 @@ def _continuous_batching(
             states[1][:, :active_count, :, :, :],
         ]
         out = model.forward_batch(next_tokens, state_view)
-        occurrence *= sampling.alpha_decay
+        alpha_decay_value = 1.0 if is_simple else sampling.alpha_decay
+        alpha_frequency_value = 0.0 if is_simple else sampling.alpha_frequency
+        occurrence *= alpha_decay_value
         active_occurrence = occurrence[:active_count]
         active_alpha_presence = alpha_presence_vector[:active_count]
-        out = out - active_alpha_presence - active_occurrence * sampling.alpha_frequency
+        out = out - active_alpha_presence - active_occurrence * alpha_frequency_value
 
         if ban_tokens:
             out[:, list(ban_tokens)] = -math.inf
@@ -269,7 +281,11 @@ def _continuous_batching(
             out /= temp
 
         logits = out.float().contiguous()
-        if flashinfer_ok:
+        if is_simple:
+            if noise:
+                logits.add_(torch.empty_like(logits).uniform_(0.0, noise))
+            new_tokens = torch.argmax(logits, dim=-1)
+        elif flashinfer_ok:
             try:
                 new_tokens = flashinfer.sampling.top_k_top_p_sampling_from_logits(
                     logits, sampling.top_k, sampling.top_p
