@@ -20,6 +20,7 @@ if "FLASHINFER_WORKSPACE_BASE" not in os.environ:
         os.environ["FLASHINFER_WORKSPACE_BASE"] = "/tmp"
 
 import flashinfer
+
 import torch
 from tqdm import tqdm
 
