@@ -70,6 +70,7 @@ rwkv-skills-scheduler queue
 rwkv-skills-scheduler dispatch --completion-dir results/completions --run-log-dir results/logs --eval-result-dir results/eval
 ```
 To ignore existing results under `results/scores` and force a rerun, pass `--overwrite` on dispatch; the scheduler will delete old completion / score / eval artifacts before re-evaluating.
+By default the evaluator scripts run the LLM wrong-answer checker when configured; to skip it, pass `--disable-checker` on dispatch.
 
 You can re-run only specific benchmarks with `--only-datasets aime24 aime25` (names only; no `_test` suffix), or exclude sets with `--skip-datasets mmlu`. To run only a subset of models, you can filter filenames via `--model-regex '^rwkv7-.*7\\.2b$'` while keeping the default weight glob.
 
@@ -114,8 +115,7 @@ When evaluating the latest 2.9B model, the scheduler automatically runs param-se
   Multiple samples are generated and executed against EvalPlus test cases to output pass@k (number of generations equals the maximum k).
 
 ## LiveCodeBench code generation evaluation
-- Dataset prep: `prepare_dataset("livecodebench", Path("data"))` downloads the LiveCodeBench release_latest (lite) split and writes `data/livecodebench/test.jsonl`.
-- Versioned datasets: `livecodebench_v1` ... `livecodebench_v6` (lite).
+- Dataset prep: `prepare_dataset("livecodebench", Path("data"))` downloads the LiveCodeBench release_v6 (lite) split and writes `data/livecodebench/test.jsonl` (override with `RWKV_SKILLS_LIVECODEBENCH_VERSION_TAG`).
 - Run via CLI:
   ```bash
   python -m src.bin.eval_code_livecodebench \
